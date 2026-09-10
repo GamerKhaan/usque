@@ -31,6 +31,10 @@ code. No open PR was blindly cherry-picked.
   fault-injection and real TCP tests cover both behaviors.
 - Listener announcements follow successful binds, and malformed UDP messages
   distinguish local SOCKS parsing from relay errors without logging payloads.
+- Optional service DNS selection preserves the core defaults when unset, and
+  validates literal resolver addresses before launching either SOCKS mode.
+- Rate-limited loopback-source packet diagnostics distinguish locally generated
+  ICMP from MASQUE ingress. Packet bytes and netstack filtering remain unchanged.
 - Protected config persistence, receiver-based key parsing, strict bounded JSON
   reads, structural validation, and safe registration endpoint parsing/errors.
 - Supervisor, service profile, installer, operations tools, tests and release CI.

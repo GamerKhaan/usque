@@ -126,6 +126,14 @@ an externally received packet carrying a loopback address. Keep that filter enab
 Investigate the originating flow if application failures accompany it; silencing
 the message by accepting external loopback traffic changes the isolation boundary.
 
+The accompanying `Tunnel packet diagnostic` distinguishes `origin=local_icmp`
+(locally generated packet-too-big feedback) from `origin=tunnel_ingress`
+(received through MASQUE). It reports only outer IP version/protocol and ICMP
+type/code when available, with bounded counters and a 30-second rate limit per
+origin/protocol. Packet contents, destination addresses and domains are not logged;
+packets still pass unchanged to normal netstack validation. This evidence helps
+locate the problem without assuming every Martian message has the same cause.
+
 Fatal TCP relay read/write failures now close both relay connections. Ordinary
 FIN keeps the reverse response path open. Regression tests cover both error cleanup
 and a response sent after request half-close. This fixes possible retained sockets
