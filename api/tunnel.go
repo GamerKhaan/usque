@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -170,6 +171,9 @@ type MaintainTunnelConfig struct {
 	ReconnectDelay    time.Duration
 	AlwaysReconnect   bool
 	UseHTTP2          bool
+	// LocalAddresses identifies the addresses configured on Device for packet
+	// diagnostics. An empty list leaves local-address matches unknown.
+	LocalAddresses []netip.Addr
 	// OnConnect is a path to an executable run after every successful tunnel
 	// connect. It is exec'd directly (no shell, no args) and runs fire-and-forget.
 	OnConnect string
@@ -234,7 +238,7 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 	var writeErrors, readErrors, icmpErrors packetErrorObserver
 	var packetDiagnostics *loopbackPacketObserver
 	if _, ok := cfg.Device.(*NetstackAdapter); ok {
-		packetDiagnostics = &loopbackPacketObserver{}
+		packetDiagnostics = &loopbackPacketObserver{localAddresses: append([]netip.Addr(nil), cfg.LocalAddresses...)}
 	}
 
 	for {

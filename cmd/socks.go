@@ -235,6 +235,7 @@ var socksCmd = &cobra.Command{
 			InitialPacketSize: initialPacketSize,
 			Endpoint:          endpoint,
 			Device:            api.NewNetstackAdapter(tunDev),
+			LocalAddresses:    localAddresses,
 			MTU:               mtu,
 			ReconnectDelay:    reconnectDelay,
 			AlwaysReconnect:   alwaysReconnect,

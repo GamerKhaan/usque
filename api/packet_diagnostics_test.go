@@ -99,7 +99,8 @@ func TestLoopbackPacketDiagnosticsRateLimitAndPrivacy(t *testing.T) {
 	var mu sync.Mutex
 	var lines []string
 	o := loopbackPacketObserver{
-		now: func() time.Time { return now },
+		localAddresses: []netip.Addr{netip.MustParseAddr("192.0.2.2")},
+		now:            func() time.Time { return now },
 		logf: func(format string, args ...any) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -136,6 +137,90 @@ func TestLoopbackPacketDiagnosticsRateLimitAndPrivacy(t *testing.T) {
 			if strings.Contains(line, private) {
 				t.Fatalf("diagnostic disclosed packet content: %s", line)
 			}
+		}
+	}
+}
+
+func TestICMPQuoteTunnelLocalMatches(t *testing.T) {
+	local := netip.MustParseAddr("172.16.0.2")
+	for _, tc := range []struct {
+		name, source, destination string
+		locals                    []netip.Addr
+		sourceMatch, destMatch    localAddressMatch
+		outerMatch                localAddressMatch
+	}{
+		{"outgoing private target", local.String(), "10.1.2.3", []netip.Addr{local}, localAddressYes, localAddressNo, localAddressYes},
+		{"return to private local", "1.1.1.1", local.String(), []netip.Addr{local}, localAddressNo, localAddressYes, localAddressYes},
+		{"both local", local.String(), local.String(), []netip.Addr{local}, localAddressYes, localAddressYes, localAddressYes},
+		{"neither local", "1.1.1.1", "192.168.1.1", []netip.Addr{local}, localAddressNo, localAddressNo, localAddressYes},
+		{"no configured locals", local.String(), "10.1.2.3", nil, localAddressUnknown, localAddressUnknown, localAddressUnknown},
+		{"invalid configured local", local.String(), "10.1.2.3", []netip.Addr{{}}, localAddressUnknown, localAddressUnknown, localAddressUnknown},
+		{"mapped configured local", local.String(), "10.1.2.3", []netip.Addr{netip.MustParseAddr("::ffff:172.16.0.2")}, localAddressYes, localAddressNo, localAddressYes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quote := diagnosticQuote(tc.destination)
+			copy(quote[12:16], netip.MustParseAddr(tc.source).AsSlice())
+			quote[10], quote[11] = 0, 0
+			binary.BigEndian.PutUint16(quote[10:12], ^checksum.Checksum(quote[:20], 0))
+			packet := diagnosticIPv4("127.0.0.1", 1, append([]byte{3, 1, 0, 0, 0, 0, 0, 0}, quote...))
+			copy(packet[16:20], local.AsSlice())
+			before := append([]byte{}, packet...)
+			header, ok := classifyLoopbackPacket(packet, tc.locals...)
+			if !ok || header.quotedSourceLocal != tc.sourceMatch || header.quotedDestinationLocal != tc.destMatch || header.outerDestinationLocal != tc.outerMatch {
+				t.Fatalf("local matches: header=%+v ok=%v", header, ok)
+			}
+			var line string
+			o := loopbackPacketObserver{localAddresses: tc.locals, logf: func(format string, args ...any) { line = fmt.Sprintf(format, args...) }}
+			o.observe(packetTunnelIngress, packet)
+			for _, field := range []string{
+				"quoted_src_is_tunnel_local=" + tc.sourceMatch.String(),
+				"quoted_dst_is_tunnel_local=" + tc.destMatch.String(),
+				"outer_destination_is_tunnel_local=" + tc.outerMatch.String(),
+			} {
+				if !strings.Contains(line, field) {
+					t.Fatalf("missing local-match field %s in %s", field, line)
+				}
+			}
+			for _, value := range []string{tc.source, tc.destination, local.String(), "127.0.0.1", "private application"} {
+				if strings.Contains(line, value) {
+					t.Fatalf("packet address or payload disclosed: %s", line)
+				}
+			}
+			if !bytes.Equal(packet, before) {
+				t.Fatal("local-match diagnostic changed packet")
+			}
+		})
+	}
+}
+
+func TestMalformedQuoteLocalMatchesRemainUnknown(t *testing.T) {
+	local := netip.MustParseAddr("192.0.2.2")
+	for _, quote := range [][]byte{diagnosticQuote(local.String())[:19], make([]byte, 20)} {
+		packet := diagnosticIPv4("127.0.0.1", 1, append([]byte{3, 1, 0, 0, 0, 0, 0, 0}, quote...))
+		header, ok := classifyLoopbackPacket(packet, local)
+		if !ok || header.outerDestinationLocal != localAddressYes || header.quotedDestination != "" || header.quotedSourceLocal != localAddressUnknown || header.quotedDestinationLocal != localAddressUnknown {
+			t.Fatalf("malformed quote produced local-match claims: header=%+v ok=%v", header, ok)
+		}
+	}
+}
+
+func TestIPv6OuterDestinationTunnelLocalMatch(t *testing.T) {
+	local := netip.MustParseAddr("2001:db8::2")
+	packet := make([]byte, 40)
+	packet[0], packet[6] = 0x60, 58
+	copy(packet[8:24], netip.IPv6Loopback().AsSlice())
+	copy(packet[24:40], local.AsSlice())
+	for _, tc := range []struct {
+		locals []netip.Addr
+		want   localAddressMatch
+	}{
+		{nil, localAddressUnknown},
+		{[]netip.Addr{local}, localAddressYes},
+		{[]netip.Addr{netip.MustParseAddr("2001:db8::3")}, localAddressNo},
+	} {
+		header, ok := classifyLoopbackPacket(packet, tc.locals...)
+		if !ok || header.outerDestinationLocal != tc.want {
+			t.Fatalf("IPv6 outer match: header=%+v ok=%v want=%s", header, ok, tc.want)
 		}
 	}
 }

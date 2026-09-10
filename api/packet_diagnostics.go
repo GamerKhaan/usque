@@ -24,16 +24,54 @@ func (origin packetOrigin) String() string {
 }
 
 type loopbackPacketHeader struct {
-	version, protocol  byte
-	icmpType, icmpCode byte
-	hasICMP            bool
-	quotedDestination  string
+	version, protocol                                                byte
+	icmpType, icmpCode                                               byte
+	hasICMP                                                          bool
+	quotedDestination                                                string
+	outerDestinationLocal, quotedSourceLocal, quotedDestinationLocal localAddressMatch
+}
+
+type localAddressMatch uint8
+
+const (
+	localAddressUnknown localAddressMatch = iota
+	localAddressNo
+	localAddressYes
+)
+
+func (m localAddressMatch) String() string {
+	switch m {
+	case localAddressNo:
+		return "false"
+	case localAddressYes:
+		return "true"
+	default:
+		return "unknown"
+	}
+}
+
+func matchesTunnelLocal(addr netip.Addr, localAddresses []netip.Addr) localAddressMatch {
+	if !addr.IsValid() {
+		return localAddressUnknown
+	}
+	addr = addr.WithZone("").Unmap()
+	match := localAddressUnknown
+	for _, local := range localAddresses {
+		if !local.IsValid() {
+			continue
+		}
+		match = localAddressNo
+		if local.WithZone("").Unmap() == addr {
+			return localAddressYes
+		}
+	}
+	return match
 }
 
 // classifyLoopbackPacket reads IP headers and, when directly available, ICMP type
 // and code. It neither retains nor modifies packet data or reads application data.
 // IPv6 protocol is the outer next-header value; extension headers are not walked.
-func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
+func classifyLoopbackPacket(packet []byte, localAddresses ...netip.Addr) (loopbackPacketHeader, bool) {
 	var h loopbackPacketHeader
 	if len(packet) == 0 {
 		return h, false
@@ -54,6 +92,7 @@ func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
 			return h, false
 		}
 		packet = packet[:total]
+		h.outerDestinationLocal = matchesTunnelLocal(netip.AddrFrom4([4]byte(packet[16:20])), localAddresses)
 		h.protocol = packet[9]
 		// Later IPv4 fragments do not start with an ICMP header.
 		h.hasICMP = h.protocol == 1 && binary.BigEndian.Uint16(packet[6:8])&0x1fff == 0
@@ -67,6 +106,7 @@ func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
 		}
 		packet = packet[:total]
 		payloadOffset = 40
+		h.outerDestinationLocal = matchesTunnelLocal(netip.AddrFrom16([16]byte(packet[24:40])), localAddresses)
 		h.protocol = packet[6]
 		h.hasICMP = h.protocol == 58
 	default:
@@ -75,7 +115,12 @@ func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
 	if h.hasICMP && len(packet)-payloadOffset >= 2 {
 		h.icmpType, h.icmpCode = packet[payloadOffset], packet[payloadOffset+1]
 		if h.version == 4 && (h.icmpType == 3 || h.icmpType == 11) && len(packet)-payloadOffset >= 8 {
-			h.quotedDestination = quotedIPv4DestinationClass(packet[payloadOffset+8:])
+			quote := packet[payloadOffset+8:]
+			h.quotedDestination = quotedIPv4DestinationClass(quote)
+			if h.quotedDestination != "" {
+				h.quotedSourceLocal = matchesTunnelLocal(netip.AddrFrom4([4]byte(quote[12:16])), localAddresses)
+				h.quotedDestinationLocal = matchesTunnelLocal(netip.AddrFrom4([4]byte(quote[16:20])), localAddresses)
+			}
 		}
 	} else {
 		h.hasICMP = false
@@ -118,16 +163,17 @@ func quotedIPv4DestinationClass(quote []byte) string {
 // outer IP protocol; each emits at most once per 30 seconds after its first event.
 // This does not change the netstack's packet validation or forwarding behavior.
 type loopbackPacketObserver struct {
-	counters [2][256]packetErrorObserver
-	now      func() time.Time
-	logf     func(string, ...any)
+	counters       [2][256]packetErrorObserver
+	localAddresses []netip.Addr
+	now            func() time.Time
+	logf           func(string, ...any)
 }
 
 func (o *loopbackPacketObserver) observe(origin packetOrigin, packet []byte) {
 	if origin > packetTunnelIngress {
 		return
 	}
-	h, ok := classifyLoopbackPacket(packet)
+	h, ok := classifyLoopbackPacket(packet, o.localAddresses...)
 	if !ok {
 		return
 	}
@@ -144,10 +190,10 @@ func (o *loopbackPacketObserver) observe(origin packetOrigin, packet []byte) {
 		logf = o.logf
 	}
 	if h.quotedDestination != "" {
-		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d icmp_type=%d icmp_code=%d quoted_destination_class=%s total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.icmpType, h.icmpCode, h.quotedDestination, total)
+		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d outer_destination_is_tunnel_local=%s icmp_type=%d icmp_code=%d quoted_destination_class=%s quoted_src_is_tunnel_local=%s quoted_dst_is_tunnel_local=%s total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.outerDestinationLocal, h.icmpType, h.icmpCode, h.quotedDestination, h.quotedSourceLocal, h.quotedDestinationLocal, total)
 	} else if h.hasICMP {
-		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d icmp_type=%d icmp_code=%d total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.icmpType, h.icmpCode, total)
+		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d outer_destination_is_tunnel_local=%s icmp_type=%d icmp_code=%d total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.outerDestinationLocal, h.icmpType, h.icmpCode, total)
 	} else {
-		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, total)
+		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d outer_destination_is_tunnel_local=%s total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.outerDestinationLocal, total)
 	}
 }
