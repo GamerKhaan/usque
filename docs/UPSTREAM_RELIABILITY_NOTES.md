@@ -71,6 +71,16 @@ failed connect deserve focused validation. Changing from `connectip.CloseError`
 to `net.ErrClosed` must also be tested against the pinned dependency. This fork
 does not assert that either classification should replace the other globally.
 
+Loopback-source ICMP normalization is also deferred. In the pinned gVisor code,
+accepted IPv4 type 3/code 1 errors can fail a pending TCP dial selected from the
+quoted connection tuple; the error handler does not verify the original SYN
+sequence. A consistent quote alone does not establish freshness or authenticity.
+Rewriting the source or relaxing the loopback filter would therefore change more
+than diagnostics. Any future adaptation needs bounded correlation with a recently
+sent SYN and dedicated netstack regression tests. Unsolicited type 3/code 1 events
+were still observed after the controlled invalid-destination reproduction, so the
+egress guard does not establish that every Martian warning is resolved.
+
 We intentionally do not change the upstream MTU default, downgrade QUIC on the
 basis of #109 speculation, change the generic SOCKS port, or auto-merge upstream.
 HTTPS health proves one TCP/DNS/TLS path; it does not prove UDP ASSOCIATE forwarding,
