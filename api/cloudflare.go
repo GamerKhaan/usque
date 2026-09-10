@@ -13,6 +13,9 @@ import (
 	"github.com/Diniboy1123/usque/models"
 )
 
+// Registration calls have a bounded total request budget and never follow redirects with credentials.
+var registrationClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+
 // Register creates a new user account by registering a WireGuard public key and generating a random Android-like device identifier.
 // The WireGuard private key isn't stored anywhere, therefore it won't be usable. It's sole purpose is to mimic the Android app's registration process.
 //
@@ -86,13 +89,13 @@ func Register(model, locale, jwt string, acceptTos bool) (*models.AccountData, e
 		req.Header.Set("CF-Access-Jwt-Assertion", jwt)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := registrationClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
@@ -159,13 +162,13 @@ func EnrollKey(deviceId string, deviceToken string, pubKey []byte, deviceName st
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := registrationClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
