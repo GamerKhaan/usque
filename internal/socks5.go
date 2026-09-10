@@ -402,6 +402,13 @@ type closeWriter interface {
 
 func (s *SOCKS5Server) relayTCP(a, b net.Conn, timeout time.Duration) {
 	var wg sync.WaitGroup
+	var closeOnce sync.Once
+	abort := func() {
+		closeOnce.Do(func() {
+			_ = a.Close()
+			_ = b.Close()
+		})
+	}
 	wg.Add(2)
 	relay := func(dst, src net.Conn) {
 		defer wg.Done()
@@ -411,19 +418,27 @@ func (s *SOCKS5Server) relayTCP(a, b net.Conn, timeout time.Duration) {
 		for {
 			if timeout > 0 {
 				if err := src.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+					abort()
 					return
 				}
 			}
 			n, err := src.Read(buf)
 			if n > 0 {
 				if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+					abort()
 					return
 				}
 			}
 			if err != nil {
-				if cw, ok := dst.(closeWriter); ok {
-					_ = cw.CloseWrite()
+				// A clean FIN leaves the return path open for the response.
+				// Resets and other errors must unblock the opposite relay too;
+				// otherwise its read can retain both connections indefinitely.
+				if errors.Is(err, io.EOF) {
+					if cw, ok := dst.(closeWriter); ok && cw.CloseWrite() == nil {
+						return
+					}
 				}
+				abort()
 				return
 			}
 		}
