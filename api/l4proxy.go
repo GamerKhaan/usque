@@ -190,26 +190,70 @@ func (p *L4Proxy) dial(ctx context.Context, target string) (*l4TCPConn, error) {
 		}
 	}
 
+	if err := establishL4Connect(ctx, stream, target); err != nil {
+		return nil, err
+	}
+	return &l4TCPConn{stream: stream, local: h3Client.udpConn.LocalAddr(), remote: l4Addr(target)}, nil
+}
+
+type l4ConnectStream interface {
+	SendRequestHeader(*http.Request) error
+	ReadResponse() (*http.Response, error)
+	SetDeadline(time.Time) error
+	CancelRead(quic.StreamErrorCode)
+	CancelWrite(quic.StreamErrorCode)
+}
+
+// OpenRequestStream's context bounds only stream allocation. Bound the header
+// write and response read too, then detach cancellation and clear deadlines
+// before handing a successful stream to its long-lived TCP relay.
+func establishL4Connect(ctx context.Context, stream l4ConnectStream, target string) (err error) {
+	reset := func() {
+		stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+		stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestCanceled))
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := stream.SetDeadline(deadline); err != nil {
+			reset()
+			return err
+		}
+	}
+	cancelDone := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		reset()
+	})
+	defer func() {
+		if !stop() {
+			// A running callback must finish before the stream can be reused.
+			<-cancelDone
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		if err == nil {
+			err = stream.SetDeadline(time.Time{})
+		}
+		if err != nil {
+			reset()
+		}
+	}()
 	req, err := http.NewRequestWithContext(ctx, http.MethodConnect, "https://"+target, nil)
 	if err != nil {
-		_ = stream.Close()
-		return nil, err
+		return err
 	}
 	req.Host = target
 	if err := stream.SendRequestHeader(req); err != nil {
-		_ = stream.Close()
-		return nil, err
+		return err
 	}
 	response, err := stream.ReadResponse()
 	if err != nil {
-		_ = stream.Close()
-		return nil, err
+		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		_ = stream.Close()
-		return nil, fmt.Errorf("CONNECT rejected with status %d", response.StatusCode)
+		return fmt.Errorf("CONNECT rejected with status %d", response.StatusCode)
 	}
-	return &l4TCPConn{stream: stream, local: h3Client.udpConn.LocalAddr(), remote: l4Addr(target)}, nil
+	return nil
 }
 
 func shouldReconnectOnOpenStreamError(ctx context.Context, err error) bool {
