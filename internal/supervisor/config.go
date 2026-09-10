@@ -14,6 +14,7 @@ import (
 // Config contains service settings, never WARP credentials.
 type Config struct {
 	Binary, ConfigPath, StatePath, Bind, Mode, HealthURL string
+	DNS                                                  []string
 	Port, HealthFailures, MTU                            int
 	HTTP2, AlwaysReconnect, AllowPublic                  bool
 	HealthInterval, HealthTimeout, ShutdownTimeout       time.Duration
@@ -36,6 +37,9 @@ func FromEnvironment(getenv func(string) string) (Config, error) {
 		if value := getenv(key); value != "" {
 			*dst = value
 		}
+	}
+	if value := getenv("USQUE_DNS"); value != "" {
+		c.DNS = strings.Split(value, ",")
 	}
 	for key, dst := range map[string]*time.Duration{
 		"USQUE_HEALTH_INTERVAL": &c.HealthInterval, "USQUE_HEALTH_TIMEOUT": &c.HealthTimeout,
@@ -92,6 +96,14 @@ func (c Config) Validate() error {
 	if c.Mode == "l4-socks" && c.HTTP2 {
 		return fmt.Errorf("l4-socks supports HTTP/3 only; select socks for USQUE_HTTP2=true")
 	}
+	if len(c.DNS) > 8 {
+		return fmt.Errorf("USQUE_DNS accepts at most 8 comma-separated IP addresses")
+	}
+	for _, server := range c.DNS {
+		if net.ParseIP(server) == nil {
+			return fmt.Errorf("USQUE_DNS must contain only comma-separated literal IP addresses, without spaces or empty entries")
+		}
+	}
 	if c.MTU < 576 || c.MTU > 65535 {
 		return fmt.Errorf("USQUE_MTU must be 576..65535; nondefault values need workload validation")
 	}
@@ -130,6 +142,9 @@ func (c Config) ChildArgs() []string {
 	args := []string{"-c", c.ConfigPath, c.Mode, "-b", c.Bind, "-p", strconv.Itoa(c.Port), "--dial-timeout", c.DialTimeout.String()}
 	if c.Mode == "socks" {
 		args = append(args, "--mtu", strconv.Itoa(c.MTU), "--always-reconnect="+strconv.FormatBool(c.AlwaysReconnect), "--http2="+strconv.FormatBool(c.HTTP2))
+	}
+	for _, server := range c.DNS {
+		args = append(args, "--dns", server)
 	}
 	return args
 }

@@ -6,7 +6,8 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 if [[ ${1:-} != --case ]]; then
   for script in "$repo/install.sh" "$repo/scripts/usquectl" "$repo/deploy/lib.sh"; do bash -n "$script"; done
-  cases=(env_defaults env_injection env_unknown atomic_switch switch_rollback switch_success switch_restart_error
+  cases=(env_defaults env_injection env_unknown env_dns env_dns_legacy env_dns_injection
+    atomic_switch switch_rollback switch_success switch_restart_error switch_unsupported_dns switch_supported_dns
     switch_activate_error switch_previous_error switch_restore_error
     import_invalid import_rollback import_success import_restore_error register_preserves register_failure
     buffers_increase buffers_preserve archive_valid archive_bad_checksum archive_link
@@ -36,6 +37,10 @@ mkdir -p "$ROOT/releases/v1.0.0" "$ROOT/releases/v2.0.0" "$ROOT/releases/v0.9.0"
 printf 'v1.0.0\n' > "$ROOT/releases/v1.0.0/VERSION"
 printf 'v2.0.0\n' > "$ROOT/releases/v2.0.0/VERSION"
 printf 'v0.9.0\n' > "$ROOT/releases/v0.9.0/VERSION"
+for version in v1.0.0 v2.0.0 v0.9.0; do
+  mkdir -p "$ROOT/releases/$version/deploy"
+  cp "$repo/deploy/lib.sh" "$ROOT/releases/$version/deploy/lib.sh"
+done
 atomic_link "$ROOT/releases/v1.0.0" "$ROOT/current"
 atomic_link "$ROOT/releases/v0.9.0" "$ROOT/previous"
 cat > "$ROOT/releases/v1.0.0/usque-supervisor" <<'MOCK'
@@ -102,6 +107,7 @@ case $2 in
     assert_equal "$USQUE_PORT" 903
     assert_equal "$USQUE_MODE" socks
     assert_equal "$USQUE_HTTP2" false
+    assert_equal "$USQUE_DNS" ''
     ;;
   env_injection)
     # Intentionally literal shell syntax tests that configuration is never run.
@@ -113,6 +119,29 @@ case $2 in
   env_unknown)
     printf 'LD_PRELOAD=/tmp/evil.so\n' > "$ETC/service.env"
     assert_fails load_env
+    ;;
+  env_dns)
+    printf 'USQUE_DNS=1.1.1.1,1.0.0.1,2606:4700:4700::1111,2606:4700:4700::1001\n' > "$ETC/service.env"
+    load_env
+    assert_equal "$USQUE_DNS" '1.1.1.1,1.0.0.1,2606:4700:4700::1111,2606:4700:4700::1001'
+    ;;
+  env_dns_legacy)
+    # An existing environment from an older installation needs no new key.
+    printf 'USQUE_MODE=l4-socks\nUSQUE_PORT=903\n' > "$ETC/service.env"
+    export USQUE_DNS=192.0.2.53
+    load_env
+    assert_equal "$USQUE_DNS" ''
+    assert_equal "$USQUE_MODE" l4-socks
+    rm "$ETC/service.env"
+    export USQUE_DNS=192.0.2.53
+    load_env
+    assert_equal "$USQUE_DNS" ''
+    ;;
+  env_dns_injection)
+    # shellcheck disable=SC2016
+    printf 'USQUE_DNS=$(touch %s/EXECUTED)\n' "$work" > "$ETC/service.env"
+    assert_fails load_env
+    [[ ! -e $work/EXECUTED ]]
     ;;
   atomic_switch)
     atomic_link "$ROOT/releases/v2.0.0" "$ROOT/current"
@@ -129,6 +158,30 @@ case $2 in
     switch_release "$ROOT/releases/v2.0.0" "$ROOT/releases/v1.0.0"
     assert_equal "$(cat "$ROOT/current/VERSION")" v2.0.0
     assert_equal "$(cat "$ROOT/previous/VERSION")" v1.0.0
+    ;;
+  switch_unsupported_dns)
+    printf '# Older release without DNS service settings\n' > "$ROOT/releases/v0.9.0/deploy/lib.sh"
+    for dns in '' '1.1.1.1,1.0.0.1'; do
+      printf 'USQUE_DNS=%s\n' "$dns" > "$ETC/service.env"
+      cp "$ETC/service.env" "$work/env.before"
+      assert_fails rollback_release
+      assert_equal "$(cat "$ROOT/current/VERSION")" v1.0.0
+      assert_equal "$(cat "$ROOT/previous/VERSION")" v0.9.0
+      files_equal "$ETC/service.env" "$work/env.before"
+      [[ ! -e $work/systemctl.calls ]]
+    done
+    # Removing the unsupported key deliberately restores the old defaults.
+    printf '# Prior settings restored\n' > "$ETC/service.env"
+    rollback_release
+    assert_equal "$(cat "$ROOT/current/VERSION")" v0.9.0
+    ;;
+  switch_supported_dns)
+    printf 'USQUE_DNS=1.1.1.1,1.0.0.1\n' > "$ETC/service.env"
+    cp "$ETC/service.env" "$work/env.before"
+    wait_healthy() { return 0; }
+    switch_release "$ROOT/releases/v2.0.0" "$ROOT/releases/v1.0.0"
+    assert_equal "$(cat "$ROOT/current/VERSION")" v2.0.0
+    files_equal "$ETC/service.env" "$work/env.before"
     ;;
   switch_restart_error)
     systemctl() {
@@ -293,6 +346,7 @@ case $2 in
     mkdir -p "$work/source/deploy"
     cp "$ROOT/releases/v1.0.0/usque-supervisor" "$work/source/usque-supervisor"
     for file in usque usquectl deploy/lib.sh deploy/usque.service LICENSE.md README.md; do printf 'fixture\n' > "$work/source/$file"; done
+    cp "$repo/deploy/lib.sh" "$work/source/deploy/lib.sh"
     sed "s|/etc/usque/config.json|$ETC/config.json|;s|/opt/usque/current/usque|$ROOT/current/usque|" \
       "$repo/deploy/service.env" > "$work/source/deploy/service.env"
     rm "$ROOT/current" "$ROOT/previous"

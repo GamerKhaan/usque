@@ -63,6 +63,32 @@ unstable. This setting is rejected for `l4-socks`. Destination DNS is tunneled i
 full socks by default; L4's upstream implementation resolves destination names
 locally. Never claim the L4 health check establishes DNS privacy through WARP.
 
+## Choosing service DNS servers
+
+`USQUE_DNS` in `/etc/usque/service.env` optionally selects up to eight literal
+IPv4/IPv6 resolver addresses, separated by commas without spaces. An omitted or
+empty value preserves the upstream Quad9 defaults. For example:
+
+```ini
+USQUE_DNS=1.1.1.1,1.0.0.1,2606:4700:4700::1111,2606:4700:4700::1001
+```
+
+Both modes pass these addresses to the core's repeatable `--dns` option. Full
+`socks` sends DNS through WARP; `l4-socks` sends DNS over the host network by its
+existing default. This setting does not edit `/etc/resolv.conf` or host DNS.
+`usquectl status` and `doctor` show the configured selection. Back up
+`service.env`, change one setting, restart with `sudo usquectl restart`, and check
+`sudo usquectl health` plus representative application traffic. Resolver latency
+and reachability depend on the network; a different provider is not a universal
+performance fix.
+
+Older releases such as `v4.2.1-gk.2` do not recognize `USQUE_DNS` in their
+management tool. Before rolling back to one, restore a compatible backup of
+`service.env` or back it up and remove the `USQUE_DNS=` line, even if it is empty.
+The new rollback preflight refuses an incompatible target before changing the
+active release. Removing the key restores upstream DNS defaults; WARP credentials
+in `config.json` are unaffected.
+
 ## UDP and client compatibility
 
 The full SOCKS listener supports TCP and UDP; L4 only supports TCP. Zero-source

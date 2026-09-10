@@ -22,14 +22,14 @@ lock_operations() {
 load_env() {
   local line key value
   export USQUE_CONFIG="$ETC/config.json" USQUE_BINARY="$ROOT/current/usque" USQUE_STATE=/run/usque/status.json
-  export USQUE_BIND=127.0.0.1 USQUE_PORT=903 USQUE_MODE=socks
+  export USQUE_BIND=127.0.0.1 USQUE_PORT=903 USQUE_MODE=socks USQUE_DNS=
   [[ -e $ETC/service.env ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
     [[ $line =~ ^(USQUE_[A-Z0-9_]+)=(.*)$ ]] || { say 'Invalid service.env line; use KEY=value with no shell syntax.' >&2; return 1; }
     key=${BASH_REMATCH[1]}; value=${BASH_REMATCH[2]}
     case "$key" in
-      USQUE_CONFIG|USQUE_BINARY|USQUE_STATE|USQUE_BIND|USQUE_PORT|USQUE_MODE|USQUE_ALLOW_PUBLIC|USQUE_HEALTH_URL|USQUE_HEALTH_INTERVAL|USQUE_HEALTH_TIMEOUT|USQUE_HEALTH_FAILURES|USQUE_DIAL_TIMEOUT|USQUE_SHUTDOWN_TIMEOUT|USQUE_BACKOFF_MIN|USQUE_BACKOFF_MAX|USQUE_HEALTHY_RESET|USQUE_ALWAYS_RECONNECT|USQUE_MTU|USQUE_HTTP2) ;;
+      USQUE_CONFIG|USQUE_BINARY|USQUE_STATE|USQUE_BIND|USQUE_PORT|USQUE_MODE|USQUE_DNS|USQUE_ALLOW_PUBLIC|USQUE_HEALTH_URL|USQUE_HEALTH_INTERVAL|USQUE_HEALTH_TIMEOUT|USQUE_HEALTH_FAILURES|USQUE_DIAL_TIMEOUT|USQUE_SHUTDOWN_TIMEOUT|USQUE_BACKOFF_MIN|USQUE_BACKOFF_MAX|USQUE_HEALTHY_RESET|USQUE_ALWAYS_RECONNECT|USQUE_MTU|USQUE_HTTP2) ;;
       *) say "Unsupported service.env key: $key" >&2; return 1 ;;
     esac
     # systemd EnvironmentFile and the management tool deliberately share this
@@ -71,6 +71,7 @@ show_version() {
 show_status() {
   systemctl --no-pager --full status usque.service || true
   printf '\nSOCKS5: %s:%s\nMode: %s\n' "$USQUE_BIND" "$USQUE_PORT" "$USQUE_MODE"
+  printf 'Configured DNS servers: %s\n' "${USQUE_DNS:-core defaults (Quad9)}"
   show_version
   "$ROOT/current/usque-supervisor" status || true
 }
@@ -96,6 +97,7 @@ doctor() {
   say "$listeners"
   if [[ -z $listeners ]]; then say 'No listener found on the configured port.'; failures=$((failures + 1)); fi
   say '=== DNS through SOCKS and HTTPS/WARP data path ==='
+  say "Configured DNS servers: ${USQUE_DNS:-core defaults (Quad9)}"
   probe || failures=$((failures + 1))
   say 'The HTTPS probe sends the target hostname to SOCKS. Full socks resolves it in the tunnel;'
   say 'l4-socks uses the core resolver behavior (currently local DNS by default).'
@@ -232,6 +234,15 @@ backup_existing_link() {
 }
 switch_release() {
   local next=$1 old=${2:-} previous_before='' reason='New release failed health validation.'
+  # Older management tools reject unknown service.env keys even when their
+  # supervisor ignores them. Reject an incompatible switch before changing the
+  # active release instead of leaving rollback management unusable.
+  if [[ -f $ETC/service.env ]] && grep -q '^USQUE_DNS=' "$ETC/service.env" &&
+     ! grep -qw 'USQUE_DNS' "$next/deploy/lib.sh"; then
+    say 'Target release does not support USQUE_DNS. Current release was not changed.' >&2
+    say 'Back up /etc/usque/service.env, remove its USQUE_DNS line (restoring core DNS defaults), then retry rollback.' >&2
+    return 1
+  fi
   if [[ -L $ROOT/previous ]]; then
     previous_before=$(release_path "$ROOT/previous") || { say 'Previous release metadata is invalid; refusing activation.' >&2; return 1; }
   elif [[ -e $ROOT/previous ]]; then
