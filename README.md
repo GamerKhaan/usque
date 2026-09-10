@@ -36,6 +36,8 @@ Registration failure returns nonzero with recovery guidance. After correcting co
 
 - Go supervision: graceful signals, bounded HTTPS probes, consecutive-failure recovery, jittered exponential backoff, runtime health and restart state.
 - Bounded SOCKS dialing and concurrency-safe unspecified-source UDP ASSOCIATE handling.
+- Prompt rejection of local-only tunnel destinations, reliable SOCKS failure replies, and packet diagnostics that omit addresses and payloads.
+- Configurable service DNS and UDP buffer tuning that preserves larger host settings; see the [operations guide](docs/OPERATIONS.md#choosing-service-dns-servers).
 - Hardened Ubuntu systemd deployment, protected credentials, journald, and management tooling.
 - Verified transactional releases, automatic rollback on failed readiness, and explicit updates.
 - Lifecycle, protocol, deployment transaction, and release packaging tests.

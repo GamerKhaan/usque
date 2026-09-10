@@ -81,13 +81,53 @@ The follow-up TCP cleanup regression failed before the fix for both read and wri
 faults, then passed ten repetitions. A real TCP test confirms responses still work
 after request FIN. The complete Go suite and internal race tests also passed locally.
 
+### Live updates and DNS selection
+
+The same host subsequently completed actual `usquectl update` transactions to
+`v4.2.1-gk.2` and `v4.2.1-gk.3`. Fresh HTTPS checks confirmed `warp=on`, and SHA256
+comparisons confirmed that both configuration files survived each update unchanged.
+The previous release remained available. These successful updates do not establish
+the behavior of a deliberately failed update on this live host.
+
+After a separate backed-up environment edit, Cloudflare's four documented resolver
+addresses were selected through `USQUE_DNS`. Fresh HTTPS and eight repeated SOCKS
+UDP DNS cases passed. Before selection, 20/20 resolver queries through SOCKS/WARP
+succeeded. Small cached IPv4 samples had median response times of 4.30-4.67 ms for
+Cloudflare and 4.89-5.14 ms for Quad9; this is not a general performance guarantee.
+Existing persisted receive/send buffer maxima were already 134217728 bytes, above
+the recommended 7500000 minimum, so they were preserved.
+
+The `v4.2.1-gk.3` release passed the complete
+[Ubuntu release workflow](https://github.com/GamerKhaan/usque/actions/runs/34487715888),
+including 33 deployment tests, race tests, the hardened systemd lifecycle fixture,
+and checked release archives for both architectures.
+
+### Bounded Martian-packet reproduction
+
+One controlled SOCKS CONNECT to `0.0.0.0:9`, with no application data, reproduced
+an ingress IPv4 ICMP destination/host-unreachable packet with a loopback source on
+`v4.2.1-gk.3`. The netstack rejected it and the request ended after 8.008 seconds
+without a SOCKS failure reply. This established two actionable paths: prevent
+literal local-only destinations from entering the tunnel, and renew the protocol
+reply deadline after dialing consumes its budget.
+
+Automated regression tests cover the expired-dial reply, successful reply at the
+deadline boundary, and remote cleanup if renewing the deadline fails. Actual
+netstack tests verify that rejected TCP/UDP destinations emit no packets, legitimate
+routed TCP still emits a SYN, and zero-source UDP association remains accepted.
+Controlled local DNS tests cover loopback/unspecified answers in the local-resolver
+branch; the default tunnel resolver's address fallback is left intact.
+
+Additional natural ICMP reports were observed separately. The controlled test does
+not establish that all such reports have the same cause. Quoted-destination class
+diagnostics were added without recording addresses or changing packet validation.
+
 ## Explicitly not established
 
 - No real Cloudflare account was registered or live WARP credentials used during
   CI. The fixture's WARP response validates the probe implementation, not
   Cloudflare availability or real enrollment.
-- No production Ubuntu host was initially installed, rebooted or upgraded by the
-  maintainer during the inspection above.
+- No production Ubuntu host was initially installed or rebooted during this work.
   Host dependency installation, real registration and failed live-release rollback
   still need staging acceptance; transaction logic was tested with controlled mocks.
 - No controlled end-to-end Xray, sing-box or Hysteria client soak was executed;
