@@ -1,46 +1,62 @@
 name: CI
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-    branches:
-      - main
-
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
-
 jobs:
-  lint-and-test:
-    name: Lint and test
+  quality:
     runs-on: ubuntu-latest
-    env:
-      CGO_ENABLED: "0"
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
+      - name: Formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
       - name: Verify modules
         run: go mod verify
-
-      - name: Build
-        run: go build -trimpath ./...
-
       - name: Vet
         run: go vet ./...
-
-      - name: Test
-        run: go test ./...
-
-      - name: golangci-lint
+      - name: Tests
+        run: go test -count=1 ./...
+      - name: Race tests
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -count=1 ./internal/... ./api ./config ./cmd
+      - name: Shell syntax and lint
+        run: |
+          for script in install.sh scripts/usquectl deploy/lib.sh tests/*.sh; do bash -n "$script"; done
+          shellcheck -x -P . install.sh scripts/usquectl deploy/lib.sh tests/*.sh
+      - name: Deployment transaction tests
+        run: bash tests/deployment_test.sh
+      - name: Unit syntax
+        run: |
+          sudo install -m 0755 /bin/true /opt/usque-supervisor-ci
+          sed 's|/opt/usque/current/usque-supervisor|/opt/usque-supervisor-ci|' deploy/usque.service > /tmp/usque.service
+          systemd-analyze verify /tmp/usque.service
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath ./...
+      - name: Hardened systemd lifecycle smoke test
+        run: |
+          go build -o /tmp/usque-systemd-supervisor ./cmd/usque-supervisor
+          go build -o /tmp/usque-systemd-fixture ./tests/fixtures/fake-usque
+          sudo --preserve-env=GITHUB_ACTIONS bash tests/systemd_smoke.sh /tmp/usque-systemd-supervisor /tmp/usque-systemd-fixture
+      - name: Lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.11.4
+          version: v2.13.2
           args: --timeout=5m
+      - name: Verify release configuration and build both architectures
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.1
+          args: release --snapshot --clean
+      - name: Verify release contents
+        run: python3 tests/check_release.py
