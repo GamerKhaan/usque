@@ -232,6 +232,10 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 
 	packetBufferPool := NewNetBuffer(cfg.MTU + datagramContextIDHeadroom)
 	var writeErrors, readErrors, icmpErrors packetErrorObserver
+	var packetDiagnostics *loopbackPacketObserver
+	if _, ok := cfg.Device.(*NetstackAdapter); ok {
+		packetDiagnostics = &loopbackPacketObserver{}
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -342,6 +346,9 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 				packetBufferPool.Put(buf)
 
 				if len(icmp) > 0 {
+					if packetDiagnostics != nil {
+						packetDiagnostics.observe(packetLocalICMP, icmp)
+					}
 					if err := cfg.Device.WritePacket(icmp); err != nil {
 						if errors.As(err, new(*connectip.CloseError)) {
 							errChan <- fmt.Errorf("connection closed while writing ICMP to TUN device: %w", err)
@@ -368,6 +375,9 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 					}
 					readErrors.report("read_ip", err)
 					continue
+				}
+				if packetDiagnostics != nil {
+					packetDiagnostics.observe(packetTunnelIngress, packet)
 				}
 				if err := cfg.Device.WritePacket(packet); err != nil {
 					errChan <- fmt.Errorf("failed to write to TUN device: %w", err)
