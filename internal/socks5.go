@@ -258,6 +258,9 @@ func (s *SOCKS5Server) dialTCP(network, _, raddr string) (net.Conn, error) {
 	if s.cfg.DialTCP != nil {
 		return s.cfg.DialTCP(ctx, network, raddr)
 	}
+	if err := validateTunnelDestination(raddr); err != nil {
+		return nil, err
+	}
 	// Default (tunnel DNS): one netstack lookup + dial, same as the old things-go WithDial path.
 	if s.cfg.Resolver.TunNet != nil {
 		return s.cfg.TunNet.DialContext(ctx, network, raddr)
@@ -277,6 +280,9 @@ func (s *SOCKS5Server) dialTCP(network, _, raddr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateTunnelDestinationHost(resIP.String()); err != nil {
+		return nil, err
+	}
 	addr, err := net.ResolveTCPAddr(network, net.JoinHostPort(resIP.String(), port))
 	if err != nil {
 		return nil, err
@@ -293,6 +299,9 @@ func (s *SOCKS5Server) dialUDPContext(parent context.Context, network, laddr, ra
 	defer cancel()
 	if s.cfg.DialUDP != nil {
 		return s.cfg.DialUDP(ctx, network, raddr)
+	}
+	if err := validateTunnelDestination(raddr); err != nil {
+		return nil, err
 	}
 	if s.cfg.Resolver.TunNet != nil {
 		c, err := s.cfg.TunNet.DialContext(ctx, network, raddr)
@@ -317,6 +326,9 @@ func (s *SOCKS5Server) dialUDPContext(parent context.Context, network, laddr, ra
 	}
 	resIP, err := s.cfg.Resolver.Resolve(ctx, host)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTunnelDestinationHost(resIP.String()); err != nil {
 		return nil, err
 	}
 	addr, err := net.ResolveUDPAddr(network, net.JoinHostPort(resIP.String(), port))
@@ -396,7 +408,11 @@ func (s *SOCKS5Server) connectTCP(c net.Conn, r *socks5.Request) (net.Conn, erro
 		return nil, errors.Join(err, fmt.Errorf("set SOCKS reply deadline: %w", deadlineErr))
 	}
 	if err != nil {
-		_, _ = socks5.NewReply(socks5.RepHostUnreachable, socks5.ATYPIPv4, net.IPv4zero.To4(), []byte{0, 0}).WriteTo(c)
+		reply := socks5.RepHostUnreachable
+		if errors.Is(err, ErrInvalidTunnelDestination) {
+			reply = socks5.RepNotAllowed
+		}
+		_, _ = socks5.NewReply(reply, socks5.ATYPIPv4, net.IPv4zero.To4(), []byte{0, 0}).WriteTo(c)
 		return nil, err
 	}
 	if err := writeSOCKSReply(c, rc.LocalAddr()); err != nil {

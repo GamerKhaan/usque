@@ -134,6 +134,22 @@ origin/protocol. Packet contents, destination addresses and domains are not logg
 packets still pass unchanged to normal netstack validation. This evidence helps
 locate the problem without assuming every Martian message has the same cause.
 
+The built-in full SOCKS tunnel dialer rejects loopback and unspecified destination
+literals, including IPv4-mapped forms, and reserved `localhost` names before network
+activity. TCP CONNECT receives SOCKS reply `0x02` (not allowed). gVisor otherwise
+converts an unspecified destination such as `0.0.0.0` into loopback, which can
+produce remote ICMP errors and a wasted dial timeout. Correct the destination in
+the calling application; `0.0.0.0` is a listening address, not a remote service.
+Zero-source UDP ASSOCIATE requests remain supported because they describe the
+client socket, not the remote destination.
+
+The same check applies to an address returned by the optional local DNS path.
+Default tunnel DNS retains upstream resolution and multiple-address fallback;
+this guard does not inspect addresses returned inside that netstack lookup. An
+ordinary domain returning a loopback or unspecified DNS answer still needs
+diagnosis. Private and other routed addresses remain allowed, and custom dialers
+(including L4 SOCKS) keep their existing destination behavior.
+
 Fatal TCP relay read/write failures now close both relay connections. Ordinary
 FIN keeps the reverse response path open. Regression tests cover both error cleanup
 and a response sent after request half-close. This fixes possible retained sockets

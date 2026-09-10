@@ -35,6 +35,11 @@ code. No open PR was blindly cherry-picked.
   validates literal resolver addresses before launching either SOCKS mode.
 - Rate-limited loopback-source packet diagnostics distinguish locally generated
   ICMP from MASQUE ingress. Packet bytes and netstack filtering remain unchanged.
+- Built-in full SOCKS dialers reject loopback/unspecified literals and reserved
+  localhost names before tunnel traffic, plus such answers from local DNS. TCP
+  replies explicitly report not allowed. Zero-source UDP associations and default
+  netstack DNS address fallback are preserved; sinkhole answers resolved inside
+  default tunnel DNS are outside this bounded guard's scope.
 - Protected config persistence, receiver-based key parsing, strict bounded JSON
   reads, structural validation, and safe registration endpoint parsing/errors.
 - Supervisor, service profile, installer, operations tools, tests and release CI.
