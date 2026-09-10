@@ -130,7 +130,10 @@ The accompanying `Tunnel packet diagnostic` distinguishes `origin=local_icmp`
 (locally generated packet-too-big feedback) from `origin=tunnel_ingress`
 (received through MASQUE). It reports only outer IP version/protocol and ICMP
 type/code when available, with bounded counters and a 30-second rate limit per
-origin/protocol. Packet contents, destination addresses and domains are not logged;
+origin/protocol. IPv4 ICMP unreachable/time-exceeded errors also include
+`quoted_destination_class` when the quote has a complete, checksummed IPv4 header;
+this distinguishes loopback, unspecified and other address classes without
+reporting the original destination. Packet contents, addresses and domains are not logged;
 packets still pass unchanged to normal netstack validation. This evidence helps
 locate the problem without assuming every Martian message has the same cause.
 

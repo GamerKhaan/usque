@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/netip"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 )
 
 type packetOrigin uint8
@@ -25,10 +27,11 @@ type loopbackPacketHeader struct {
 	version, protocol  byte
 	icmpType, icmpCode byte
 	hasICMP            bool
+	quotedDestination  string
 }
 
-// classifyLoopbackPacket reads only the outer IP header and, when directly
-// available, the ICMP type and code. It neither retains nor modifies packet data.
+// classifyLoopbackPacket reads IP headers and, when directly available, ICMP type
+// and code. It neither retains nor modifies packet data or reads application data.
 // IPv6 protocol is the outer next-header value; extension headers are not walked.
 func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
 	var h loopbackPacketHeader
@@ -71,10 +74,43 @@ func classifyLoopbackPacket(packet []byte) (loopbackPacketHeader, bool) {
 	}
 	if h.hasICMP && len(packet)-payloadOffset >= 2 {
 		h.icmpType, h.icmpCode = packet[payloadOffset], packet[payloadOffset+1]
+		if h.version == 4 && (h.icmpType == 3 || h.icmpType == 11) && len(packet)-payloadOffset >= 8 {
+			h.quotedDestination = quotedIPv4DestinationClass(packet[payloadOffset+8:])
+		}
 	} else {
 		h.hasICMP = false
 	}
 	return h, true
+}
+
+// ICMP errors quote only a prefix of the original packet. Require a complete,
+// checksummed IPv4 header, but not its full original payload. Only the address
+// class is returned; no quoted bytes or address values enter diagnostics.
+func quotedIPv4DestinationClass(quote []byte) string {
+	if len(quote) < 20 || quote[0]>>4 != 4 {
+		return ""
+	}
+	headerLen := int(quote[0]&0xf) * 4
+	if headerLen < 20 || headerLen > len(quote) || int(binary.BigEndian.Uint16(quote[2:4])) < headerLen || checksum.Checksum(quote[:headerLen], 0) != 0xffff {
+		return ""
+	}
+	addr := netip.AddrFrom4([4]byte(quote[16:20]))
+	switch {
+	case addr.IsLoopback():
+		return "loopback"
+	case addr.IsUnspecified():
+		return "unspecified"
+	case addr.IsPrivate():
+		return "private"
+	case addr.IsLinkLocalUnicast():
+		return "link_local"
+	case addr.IsMulticast():
+		return "multicast"
+	case addr.IsGlobalUnicast():
+		return "global_unicast"
+	default:
+		return "other"
+	}
 }
 
 // loopbackPacketObserver distinguishes locally synthesized ICMP from packets
@@ -107,7 +143,9 @@ func (o *loopbackPacketObserver) observe(origin packetOrigin, packet []byte) {
 	if o.logf != nil {
 		logf = o.logf
 	}
-	if h.hasICMP {
+	if h.quotedDestination != "" {
+		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d icmp_type=%d icmp_code=%d quoted_destination_class=%s total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.icmpType, h.icmpCode, h.quotedDestination, total)
+	} else if h.hasICMP {
 		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d icmp_type=%d icmp_code=%d total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, h.icmpType, h.icmpCode, total)
 	} else {
 		logf("Tunnel packet diagnostic: origin=%s source_class=loopback ip_version=%d protocol=%d total=%d; packet passed unchanged to netstack validation", origin, h.version, h.protocol, total)

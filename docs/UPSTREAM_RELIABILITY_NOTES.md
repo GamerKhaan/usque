@@ -35,6 +35,8 @@ code. No open PR was blindly cherry-picked.
   validates literal resolver addresses before launching either SOCKS mode.
 - Rate-limited loopback-source packet diagnostics distinguish locally generated
   ICMP from MASQUE ingress. Packet bytes and netstack filtering remain unchanged.
+  Valid IPv4 ICMP error quotes report only the destination address class, allowing
+  loopback-related errors to be distinguished without exposing packet contents.
 - Built-in full SOCKS dialers reject loopback/unspecified literals and reserved
   localhost names before tunnel traffic, plus such answers from local DNS. TCP
   replies explicitly report not allowed. Zero-source UDP associations and default

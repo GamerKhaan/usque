@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/tcpip/checksum"
 )
 
 func diagnosticIPv4(source string, protocol byte, payload []byte) []byte {
@@ -134,6 +136,76 @@ func TestLoopbackPacketDiagnosticsRateLimitAndPrivacy(t *testing.T) {
 			if strings.Contains(line, private) {
 				t.Fatalf("diagnostic disclosed packet content: %s", line)
 			}
+		}
+	}
+}
+
+func diagnosticQuote(destination string) []byte {
+	quote := diagnosticIPv4("192.0.2.2", 6, []byte("private application payload"))
+	copy(quote[16:20], netip.MustParseAddr(destination).AsSlice())
+	binary.BigEndian.PutUint16(quote[10:12], ^checksum.Checksum(quote[:20], 0))
+	return quote
+}
+
+func TestICMPQuotedDestinationClass(t *testing.T) {
+	for _, tc := range []struct{ destination, class string }{
+		{"127.0.0.1", "loopback"}, {"0.0.0.0", "unspecified"}, {"10.1.2.3", "private"},
+		{"169.254.1.2", "link_local"}, {"224.0.0.1", "multicast"}, {"1.1.1.1", "global_unicast"}, {"255.255.255.255", "other"},
+	} {
+		for _, icmpType := range []byte{3, 11} {
+			// A quote may contain only the original header and eight payload bytes,
+			// even when the original IPv4 total length is larger.
+			quote := diagnosticQuote(tc.destination)[:28]
+			body := append([]byte{icmpType, 1, 0, 0, 0, 0, 0, 0}, quote...)
+			packet := diagnosticIPv4("127.23.45.67", 1, body)
+			before := append([]byte{}, packet...)
+			header, ok := classifyLoopbackPacket(packet)
+			if !ok || header.quotedDestination != tc.class {
+				t.Fatalf("ICMP type %d quote destination %s: header=%+v ok=%v", icmpType, tc.destination, header, ok)
+			}
+			var line string
+			o := loopbackPacketObserver{logf: func(format string, args ...any) { line = fmt.Sprintf(format, args...) }}
+			o.observe(packetTunnelIngress, packet)
+			if !strings.Contains(line, "quoted_destination_class="+tc.class) {
+				t.Fatalf("missing quote class in diagnostic: %s", line)
+			}
+			for _, value := range []string{tc.destination, "127.23.45.67", "192.0.2.2", "private application"} {
+				if strings.Contains(line, value) {
+					t.Fatalf("quote leaked into diagnostic: %s", line)
+				}
+			}
+			if !bytes.Equal(packet, before) {
+				t.Fatal("diagnostic modified ICMP quote")
+			}
+		}
+	}
+}
+
+func TestICMPQuotedDestinationRequiresValidHeader(t *testing.T) {
+	quote := diagnosticQuote("127.0.0.1")
+	for size := 0; size < 20; size++ {
+		if got := quotedIPv4DestinationClass(quote[:size]); got != "" {
+			t.Fatalf("truncated quote size %d class = %s", size, got)
+		}
+	}
+	for _, mutate := range []func([]byte){
+		func(p []byte) { p[0] = 0x65 },
+		func(p []byte) { p[0] = 0x44 },
+		func(p []byte) { p[0] = 0x4f },
+		func(p []byte) { p[10] ^= 1 },
+		func(p []byte) { p[2], p[3] = 0, 19 },
+	} {
+		invalid := append([]byte{}, quote...)
+		mutate(invalid)
+		if got := quotedIPv4DestinationClass(invalid); got != "" {
+			t.Fatalf("malformed quote classified as %s", got)
+		}
+	}
+	for _, icmpType := range []byte{0, 4, 5, 8, 12} {
+		body := append([]byte{icmpType, 0, 0, 0, 0, 0, 0, 0}, quote...)
+		header, _ := classifyLoopbackPacket(diagnosticIPv4("127.0.0.1", 1, body))
+		if header.quotedDestination != "" {
+			t.Fatalf("unrelated ICMP type %d interpreted as quoted error", icmpType)
 		}
 	}
 }
