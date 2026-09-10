@@ -113,7 +113,7 @@ doctor() {
   say '=== Recent journal warnings/errors ==='
   # Go log messages written to stderr are often classified as info by journald.
   journalctl -u usque.service --since '-15 min' --no-pager -n 200 |
-    grep -Ei 'error|fail|timeout|timed out|unhealthy|restart|closed' | tail -n 40 || true
+    grep -Ei 'error|fail|timeout|timed out|unhealthy|restart|closed|martian|tunnel packet diagnostic' | tail -n 40 || true
   ((failures == 0))
 }
 

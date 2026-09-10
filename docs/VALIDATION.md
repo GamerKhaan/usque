@@ -122,6 +122,25 @@ Additional natural ICMP reports were observed separately. The controlled test do
 not establish that all such reports have the same cause. Quoted-destination class
 diagnostics were added without recording addresses or changing packet validation.
 
+The actual update to `v4.2.1-gk.4` subsequently passed fresh HTTPS readiness and
+preserved both config files byte-for-byte. Seven controlled local-only destinations
+received full SOCKS `RepNotAllowed` replies in 0.459-3.035 ms, including the earlier
+unspecified-address reproduction. Eight repeated real UDP DNS cases passed;
+`usquectl doctor` and three further HTTPS/WARP checks passed (70-82 ms). The previous
+`gk.3` release remained available. Its exact-tag
+[Ubuntu release CI](https://github.com/GamerKhaan/usque/actions/runs/34490030793)
+passed the complete suite, systemd fixture, and both architecture builds.
+
+Natural loopback-source ICMP reports later recurred while health remained good
+with zero child restarts. Sampled quotations had private destinations; that class
+alone cannot distinguish a private target from an assigned private tunnel address.
+One 30.004-second passive header-only UDP sample observed 616 correctly framed
+datagrams: 501 global and 115 private literal destinations. No parse-rejected
+datagram was captured in that sample. Kernel filtering excluded domains and
+application payload, and no capture file or address values were recorded. These
+observations motivated local-address match labels and explicit parser reasons;
+they do not justify blanket private-network blocking or accepting rewritten ICMP.
+
 ## Explicitly not established
 
 - No real Cloudflare account was registered or live WARP credentials used during

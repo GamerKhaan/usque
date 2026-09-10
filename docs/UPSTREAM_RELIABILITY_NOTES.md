@@ -33,12 +33,17 @@ code. No open PR was blindly cherry-picked.
   fault-injection and real TCP tests cover both behaviors.
 - Listener announcements follow successful binds, and malformed UDP messages
   distinguish local SOCKS parsing from relay errors without logging payloads.
+  Parser rejection categories identify malformed framing or empty payload without
+  changing the pinned parser's acceptance and fragment behavior.
 - Optional service DNS selection preserves the core defaults when unset, and
   validates literal resolver addresses before launching either SOCKS mode.
 - Rate-limited loopback-source packet diagnostics distinguish locally generated
   ICMP from MASQUE ingress. Packet bytes and netstack filtering remain unchanged.
   Valid IPv4 ICMP error quotes report only the destination address class, allowing
   loopback-related errors to be distinguished without exposing packet contents.
+  Full SOCKS supplies its tunnel addresses for source/destination match labels;
+  these distinguish a private target from the tunnel's own private address without
+  logging either address or treating a quote as trusted routing evidence.
 - Built-in full SOCKS dialers reject loopback/unspecified literals and reserved
   localhost names before tunnel traffic, plus such answers from local DNS. TCP
   replies explicitly report not allowed. Zero-source UDP associations and default

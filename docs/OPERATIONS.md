@@ -116,10 +116,16 @@ and the affected application before diagnosing a complete tunnel outage. Raising
 the timeout can retain failed attempts longer; it does not repair an unreachable
 destination.
 
-`SOCKS UDP datagram ... failed during parsing: Bad Request` means the local listener
-received an invalid SOCKS5 UDP frame. Check the client's UDP encapsulation. It is
-not a Cloudflare HTTP response. The TCP control channel must also stay open for
+`SOCKS UDP datagram ... failed during parsing ... Bad Request` means the local
+listener rejected a SOCKS5 UDP frame. The accompanying reason identifies an
+invalid address type, truncated header/address/port, empty domain, or empty
+application payload. The pinned parser rejects a complete header with no payload
+too; this message alone does not establish corruption or a WARP failure. Check
+the client's UDP encapsulation. The TCP control channel must also stay open for
 UDP forwarding. Older fork releases printed only `Bad Request` for this path.
+Fragmented SOCKS UDP frames are unsupported and are discarded after parsing;
+nonzero FRAG alone does not produce this parser error. These messages contain no
+packet payload or destination address.
 
 gVisor's `Martian packet dropped with loopback ... address` reports rejection of
 an externally received packet carrying a loopback address. Keep that filter enabled.
@@ -136,6 +142,18 @@ this distinguishes loopback, unspecified and other address classes without
 reporting the original destination. Packet contents, addresses and domains are not logged;
 packets still pass unchanged to normal netstack validation. This evidence helps
 locate the problem without assuming every Martian message has the same cause.
+
+Full SOCKS also provides its configured tunnel addresses to the diagnostics.
+`outer_destination_is_tunnel_local`, `quoted_src_is_tunnel_local` and
+`quoted_dst_is_tunnel_local` report only `true`, `false` or `unknown`; other modes
+without this metadata report `unknown`. A private quoted destination might be
+the tunnel's own assigned address on a return packet. Compare these fields before
+assuming the client requested a private host or introducing a destination policy.
+Address matches do not establish quote freshness or authenticity. `usquectl doctor`
+includes Martian warnings and their accompanying packet diagnostics in its recent
+journal summary.
+Counters cover all events for the origin/protocol; address classes and match labels
+describe only the event sampled for that log line.
 
 The built-in full SOCKS tunnel dialer rejects loopback and unspecified destination
 literals, including IPv4-mapped forms, and reserved `localhost` names before network
