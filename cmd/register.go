@@ -16,8 +16,10 @@ import (
 )
 
 var registerCmd = &cobra.Command{
-	Use:   "register",
-	Short: "Register a new client and enroll a device key",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Use:           "register",
+	Short:         "Register a new client and enroll a device key",
 	Long: "Registers a new account and enrolls a device key. Also makes sure that it switches to" +
 		" MASQUE mode. Saves the config to a file.",
 	RunE: func(cmd *cobra.Command, args []string) error {

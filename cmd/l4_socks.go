@@ -12,9 +12,11 @@ import (
 )
 
 var l4SocksCmd = &cobra.Command{
-	Use:   "l4-socks",
-	Short: "Expose Warp as an L4 TCP-only SOCKS5 proxy",
-	Long:  "TCP-only SOCKS5 proxy using direct HTTP/3 CONNECT streams. Doesn't require elevated privileges.",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Use:           "l4-socks",
+	Short:         "Expose Warp as an L4 TCP-only SOCKS5 proxy",
+	Long:          "TCP-only SOCKS5 proxy using direct HTTP/3 CONNECT streams. Doesn't require elevated privileges.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dialTimeout, err := cmd.Flags().GetDuration("dial-timeout")
 		if err != nil {

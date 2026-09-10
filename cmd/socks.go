@@ -17,9 +17,11 @@ import (
 )
 
 var socksCmd = &cobra.Command{
-	Use:   "socks",
-	Short: "Expose Warp as a SOCKS5 proxy",
-	Long:  "Dual-stack SOCKS5 proxy with optional authentication. Doesn't require elevated privileges.",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Use:           "socks",
+	Short:         "Expose Warp as a SOCKS5 proxy",
+	Long:          "Dual-stack SOCKS5 proxy with optional authentication. Doesn't require elevated privileges.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if !config.ConfigLoaded {
 			return fmt.Errorf("config not loaded: please register first")
