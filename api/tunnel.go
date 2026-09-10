@@ -231,6 +231,7 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 	}
 
 	packetBufferPool := NewNetBuffer(cfg.MTU + datagramContextIDHeadroom)
+	var writeErrors, readErrors, icmpErrors packetErrorObserver
 
 	for {
 		if ctx.Err() != nil {
@@ -335,7 +336,7 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 						errChan <- fmt.Errorf("connection closed while writing to IP connection: %w", err)
 						return
 					}
-					log.Printf("Error writing to IP connection: %v, continuing...", err)
+					writeErrors.report("write_ip", err)
 					continue
 				}
 				packetBufferPool.Put(buf)
@@ -346,7 +347,7 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 							errChan <- fmt.Errorf("connection closed while writing ICMP to TUN device: %w", err)
 							return
 						}
-						log.Printf("Error writing ICMP to TUN device: %v, continuing...", err)
+						icmpErrors.report("write_icmp", err)
 					}
 				}
 			}
@@ -365,7 +366,7 @@ func MaintainTunnel(ctx context.Context, cfg MaintainTunnelConfig) {
 						errChan <- fmt.Errorf("connection closed while reading from IP connection: %w", err)
 						return
 					}
-					log.Printf("Error reading from IP connection: %v, continuing...", err)
+					readErrors.report("read_ip", err)
 					continue
 				}
 				if err := cfg.Device.WritePacket(packet); err != nil {
