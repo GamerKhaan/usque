@@ -1,0 +1,48 @@
+[Unit]
+Description=usque supervised WARP SOCKS proxy
+Documentation=https://github.com/GamerKhaan/usque
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=usque
+Group=usque
+EnvironmentFile=/etc/usque/service.env
+ExecStart=/opt/usque/current/usque-supervisor run
+WorkingDirectory=/var/lib/usque
+StateDirectory=usque
+StateDirectoryMode=0750
+RuntimeDirectory=usque
+RuntimeDirectoryMode=0750
+UMask=0077
+Restart=always
+RestartSec=5s
+# SIGTERM reaches the supervisor first; it reaps the child. At the systemd
+# deadline the entire cgroup is killed, including any remaining children.
+KillMode=mixed
+TimeoutStopSec=90s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=usque
+LimitNOFILE=65536
+NoNewPrivileges=true
+# Port 903 is privileged on stock Ubuntu. No network-administration capability
+# is needed for the userspace SOCKS modes.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/usque /run/usque
+
+[Install]
+WantedBy=multi-user.target
