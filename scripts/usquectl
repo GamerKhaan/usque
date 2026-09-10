@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+script_dir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")
+# shellcheck source=deploy/lib.sh
+source "$script_dir/deploy/lib.sh"
+
+usage() {
+  printf '%s\n' 'Usage: usquectl {status|health|doctor|logs|restart|register|import-config PATH|update|rollback|version|uninstall}'
+}
+
+case ${1:-status} in
+  status) load_env; show_status ;;
+  health) load_env; probe ;;
+  doctor) load_env; doctor ;;
+  logs) exec journalctl -u usque.service -n 100 -f ;;
+  version) show_version ;;
+  restart) require_root; lock_operations; load_env; systemctl restart usque.service; wait_healthy ;;
+  register) require_root; lock_operations; load_env; register_config; systemctl enable usque.service; systemctl restart usque.service; wait_healthy ;;
+  import-config) require_root; [[ $# == 2 ]] || die 'usage: usquectl import-config PATH'; lock_operations; load_env; import_config "$2" ;;
+  update) require_root; lock_operations; load_env; update_release ;;
+  rollback) require_root; lock_operations; load_env; rollback_release ;;
+  uninstall) require_root; lock_operations; uninstall_service ;;
+  _install) require_root; [[ $# == 3 ]] || die 'invalid installer invocation'; lock_operations; install_release "$2" "$3" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 2 ;;
+esac
