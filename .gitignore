@@ -30,3 +30,18 @@ usque
 usque.exe
 dist/.vscode/
 .vscode/
+
+# Production credentials and local build/test artifacts
+service.env
+!deploy/service.env
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+secrets*.json
+*.bak
+/dist/
+/bin/
+/usque-supervisor
+/coverage/
