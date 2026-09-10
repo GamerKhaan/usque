@@ -57,15 +57,41 @@ SIGTERM forwarding, child reaping, forced-stop deadlines and process-group
 descendant cleanup. Local HTTP/3 tests verified L4 handshake deadlines and that
 successful streams survive dial-context expiry.
 
+## Live WARP follow-up, 2026-09-10
+
+An operator-provided Ubuntu 24.04 amd64 host already running `v4.2.1-gk.1` was
+inspected during existing traffic. This was an inspection of an installed service,
+not execution of the initial installer by the maintainer.
+
+- `usquectl doctor` validated the config structure, root:usque 0640 ownership,
+  unprivileged service, and TCP/UDP listening only on `127.0.0.1:903`.
+- Six consecutive fresh HTTPS/WARP probes succeeded (82-324 ms), plus individual
+  health checks. All confirmed `warp=on` with normal certificate verification.
+- Eight real UDP DNS queries succeeded: zero-source and explicit-source
+  associations, each with IP and domain destinations, repeated twice. UDP source
+  ports differed from their TCP control ports. Replies matched DNS transaction ID,
+  response flag, success code and expected relay source. Controls stayed open.
+- Three 1 MiB HTTPS transfers completed with HTTP 200 and the exact expected size.
+
+These bounded checks do not certify all client implementations, UDP concurrency,
+peak throughput or long-term stability. The live service was not deliberately
+killed or interrupted for failure injection during this inspection.
+
+The follow-up TCP cleanup regression failed before the fix for both read and write
+faults, then passed ten repetitions. A real TCP test confirms responses still work
+after request FIN. The complete Go suite and internal race tests also passed locally.
+
 ## Explicitly not established
 
 - No real Cloudflare account was registered or live WARP credentials used during
   CI. The fixture's WARP response validates the probe implementation, not
   Cloudflare availability or real enrollment.
-- No production Ubuntu host was installed, rebooted or upgraded in this work.
+- No production Ubuntu host was initially installed, rebooted or upgraded by the
+  maintainer during the inspection above.
   Host dependency installation, real registration and failed live-release rollback
   still need staging acceptance; transaction logic was tested with controlled mocks.
-- No actual Xray, sing-box or Hysteria client workload/UDP soak was executed.
+- No controlled end-to-end Xray, sing-box or Hysteria client soak was executed;
+  direct SOCKS UDP checks on the operating host do not replace that acceptance.
 - Linux arm64 artifacts were cross-built and inspected, not run on arm64 hardware.
 - No throughput, capacity, uptime guarantee, or MTU/QUIC root-cause claim is made.
 

@@ -26,6 +26,11 @@ code. No open PR was blindly cherry-picked.
 - Concurrency-safe zero-source UDP associations, source IP restriction, atomic
   claims and teardown of associated relay sockets with the TCP control channel.
 - SOCKS startup errors return nonzero using scoped Cobra `RunE` handlers.
+- Fatal TCP relay errors close both directions so the opposite reader cannot
+  retain connections indefinitely. Normal TCP half-close remains supported;
+  fault-injection and real TCP tests cover both behaviors.
+- Listener announcements follow successful binds, and malformed UDP messages
+  distinguish local SOCKS parsing from relay errors without logging payloads.
 - Protected config persistence, receiver-based key parsing, strict bounded JSON
   reads, structural validation, and safe registration endpoint parsing/errors.
 - Supervisor, service profile, installer, operations tools, tests and release CI.

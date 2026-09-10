@@ -77,6 +77,34 @@ The HTTPS probe cannot detect an isolated UDP forwarding failure. Test DNS/QUIC
 or another controlled UDP application through your exact proxy chain and monitor
 concurrent associations. Upstream client reports do not replace local validation.
 
+## Interpreting logs while traffic still works
+
+`address already in use` at startup means another TCP or UDP listener owns the
+configured port. Inspect `sudo ss -lntup 'sport = :903'` and avoid running a second
+manual proxy beside systemd. Listener announcements appear only after the required
+socket binds succeed. A listener announcement still does not establish WARP readiness.
+
+A SOCKS connection `context deadline exceeded` describes the bounded DNS/dial
+attempt for that request. Compare fresh `usquectl health`, consecutive failures,
+and the affected application before diagnosing a complete tunnel outage. Raising
+the timeout can retain failed attempts longer; it does not repair an unreachable
+destination.
+
+`SOCKS UDP datagram ... failed during parsing: Bad Request` means the local listener
+received an invalid SOCKS5 UDP frame. Check the client's UDP encapsulation. It is
+not a Cloudflare HTTP response. The TCP control channel must also stay open for
+UDP forwarding. Older fork releases printed only `Bad Request` for this path.
+
+gVisor's `Martian packet dropped with loopback ... address` reports rejection of
+an externally received packet carrying a loopback address. Keep that filter enabled.
+Investigate the originating flow if application failures accompany it; silencing
+the message by accepting external loopback traffic changes the isolation boundary.
+
+Fatal TCP relay read/write failures now close both relay connections. Ordinary
+FIN keeps the reverse response path open. Regression tests cover both error cleanup
+and a response sent after request half-close. This fixes possible retained sockets
+after errors; it does not imply every live timeout was caused by that defect.
+
 ## Updates, imports and rollback
 
 `usquectl update` obtains the latest release from this fork, verifies SHA256, and
