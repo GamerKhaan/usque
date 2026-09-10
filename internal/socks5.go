@@ -221,7 +221,7 @@ func (s *SOCKS5Server) listenAndServe() error {
 					payload := (*bp)[:n]
 					d, err := socks5.NewDatagramFromBytes(payload)
 					if err != nil {
-						s.cfg.Logger.Printf("SOCKS UDP datagram from %s failed during parsing: %v", addr, err)
+						s.cfg.Logger.Printf("SOCKS UDP datagram from %s failed during parsing: %v reason=%s", addr, err, socksUDPParseFailureReason(payload))
 						return
 					}
 					if d.Frag != 0x00 {
