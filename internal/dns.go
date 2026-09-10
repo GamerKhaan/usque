@@ -29,7 +29,7 @@ type TunnelDNSResolver struct {
 }
 
 // Resolve performs a DNS lookup using the provided DNS resolvers.
-// It tries each resolver in order until one succeeds, sending queries either through the tunnel
+// It queries the configured resolvers concurrently, sending queries either through the tunnel
 // or over the system network depending on TunNet.
 func (r TunnelDNSResolver) Resolve(ctx context.Context, name string) (net.IP, error) {
 	if r.UseOSResolver {
@@ -53,12 +53,12 @@ func (r TunnelDNSResolver) Resolve(ctx context.Context, name string) (net.IP, er
 		return nil, fmt.Errorf("no DNS servers configured")
 	}
 
-	queryCtx := ctx
-	var cancel context.CancelFunc
+	queryCtx, cancel := context.WithCancel(ctx)
 	if r.Timeout > 0 {
+		cancel()
 		queryCtx, cancel = context.WithTimeout(ctx, r.Timeout)
-		defer cancel()
 	}
+	defer cancel()
 
 	type result struct {
 		ip  net.IP
@@ -77,7 +77,7 @@ func (r TunnelDNSResolver) Resolve(ctx context.Context, name string) (net.IP, er
 				}
 			} else {
 				dialFunc = func(ctx context.Context, network, address string) (net.Conn, error) {
-					return net.Dial("udp", dnsHost)
+					return (&net.Dialer{}).DialContext(ctx, "udp", dnsHost)
 				}
 			}
 
@@ -96,11 +96,13 @@ func (r TunnelDNSResolver) Resolve(ctx context.Context, name string) (net.IP, er
 
 	var lastErr error
 	for i := 0; i < len(r.DNSAddrs); i++ {
-		res := <-results
+		var res result
+		select {
+		case <-queryCtx.Done():
+			return nil, queryCtx.Err()
+		case res = <-results:
+		}
 		if res.err == nil && res.ip != nil {
-			if cancel != nil {
-				cancel()
-			}
 			return res.ip, nil
 		}
 		lastErr = res.err
@@ -140,7 +142,7 @@ func NewStaticResolver(dnsAddrs []netip.Addr) *net.Resolver {
 				return nil, fmt.Errorf("no DNS servers configured")
 			}
 			dnsHost := net.JoinHostPort(dnsAddrs[0].String(), "53")
-			return net.Dial("udp", dnsHost)
+			return (&net.Dialer{}).DialContext(ctx, "udp", dnsHost)
 		},
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"net"
@@ -18,25 +19,41 @@ import (
 
 // SOCKS5Config holds listen address, auth, tunnel dialers, and timeouts for [SOCKS5Server].
 type SOCKS5Config struct {
-	Addr       string
-	Username   string
-	Password   string
-	Resolver   *TunnelDNSResolver
-	TunNet     *netstack.Net
-	DialTCP    func(ctx context.Context, network, address string) (net.Conn, error)
-	TCPOnly    bool
-	TCPTimeout time.Duration // 0 = no deadline on TCP CONNECT relay
-	UDPTimeout time.Duration // 0 = no deadline on remote UDP reads
-	Logger     *log.Logger
+	Addr        string
+	Username    string
+	Password    string
+	Resolver    *TunnelDNSResolver
+	TunNet      *netstack.Net
+	DialTCP     func(ctx context.Context, network, address string) (net.Conn, error)
+	DialUDP     func(ctx context.Context, network, address string) (net.Conn, error)
+	TCPOnly     bool
+	DialTimeout time.Duration // Bounds DNS resolution and connection establishment; 0 uses 15s.
+	TCPTimeout  time.Duration // 0 = no deadline on TCP CONNECT relay
+	UDPTimeout  time.Duration // 0 = no deadline on remote UDP reads
+	Logger      *log.Logger
 }
 
-// SOCKS5Server wraps txthinking/socks5; DialTCP/DialUDP are package globals (last NewSOCKS5Server wins).
+// SOCKS5Server wraps the SOCKS5 protocol parser with server-local dialers and associations.
 type SOCKS5Server struct {
-	cfg    SOCKS5Config
-	server *socks5.Server
+	cfg              SOCKS5Config
+	server           *socks5.Server
+	udpAssociationMu sync.Mutex
+	pendingUDP       map[string][]*udpAssociation
+	associatedUDP    map[string]*udpAssociation
+	udpFlows         sync.Map // udpFlowKey -> *socks5.UDPExchange
+	udpFlowLocks     [64]sync.Mutex
 }
 
 func NewSOCKS5Server(cfg SOCKS5Config) (*SOCKS5Server, error) {
+	if cfg.DialTimeout < 0 {
+		return nil, errors.New("socks5: DialTimeout must be positive")
+	}
+	if cfg.DialTimeout == 0 {
+		cfg.DialTimeout = 15 * time.Second
+	}
+	if !cfg.TCPOnly && cfg.DialUDP == nil && (cfg.Resolver == nil || cfg.TunNet == nil) {
+		return nil, errors.New("socks5: UDP needs DialUDP or a Resolver and TunNet")
+	}
 	if cfg.DialTCP == nil {
 		if cfg.Resolver == nil {
 			return nil, errors.New("socks5: Resolver is required")
@@ -62,15 +79,15 @@ func NewSOCKS5Server(cfg SOCKS5Config) (*SOCKS5Server, error) {
 		return nil, err
 	}
 
-	s := &SOCKS5Server{cfg: cfg, server: srv}
+	s := &SOCKS5Server{
+		cfg: cfg, server: srv,
+		pendingUDP:    make(map[string][]*udpAssociation),
+		associatedUDP: make(map[string]*udpAssociation),
+	}
 	if cfg.TCPOnly {
 		srv.SupportedCommands = []byte{socks5.CmdConnect}
 	}
 	srv.LimitUDP = !cfg.TCPOnly
-	socks5.DialTCP = s.dialTCP
-	if !cfg.TCPOnly {
-		socks5.DialUDP = s.dialUDP
-	}
 	return s, nil
 }
 
@@ -143,6 +160,9 @@ func (s *SOCKS5Server) listenAndServe() error {
 				}
 				go func(c *net.TCPConn) {
 					defer func() { _ = c.Close() }()
+					if err := c.SetDeadline(time.Now().Add(s.cfg.DialTimeout)); err != nil {
+						return
+					}
 					if err := srv.Negotiate(c); err != nil {
 						logSOCKSError("negotiation", c.RemoteAddr(), err)
 						return
@@ -150,6 +170,9 @@ func (s *SOCKS5Server) listenAndServe() error {
 					r, err := srv.GetRequest(c)
 					if err != nil {
 						logSOCKSError("request parsing", c.RemoteAddr(), err)
+						return
+					}
+					if err := c.SetDeadline(time.Time{}); err != nil {
 						return
 					}
 					if err := srv.Handle.TCPHandle(srv, c, r); err != nil {
@@ -166,7 +189,8 @@ func (s *SOCKS5Server) listenAndServe() error {
 		return srv.RunnerGroup.Wait()
 	}
 
-	addr1, err := net.ResolveUDPAddr("udp", srv.Addr)
+	// Share the actual TCP port, including when a library caller requests port 0.
+	addr1, err := net.ResolveUDPAddr("udp", l.Addr().String())
 	if err != nil {
 		_ = l.Close()
 		return err
@@ -227,12 +251,14 @@ func logSOCKSError(stage string, addr net.Addr, err error) {
 }
 
 func (s *SOCKS5Server) dialTCP(network, _, raddr string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.DialTimeout)
+	defer cancel()
 	if s.cfg.DialTCP != nil {
-		return s.cfg.DialTCP(context.Background(), network, raddr)
+		return s.cfg.DialTCP(ctx, network, raddr)
 	}
 	// Default (tunnel DNS): one netstack lookup + dial, same as the old things-go WithDial path.
 	if s.cfg.Resolver.TunNet != nil {
-		return s.cfg.TunNet.DialContext(context.Background(), network, raddr)
+		return s.cfg.TunNet.DialContext(ctx, network, raddr)
 	}
 	host, port, err := net.SplitHostPort(raddr)
 	if err != nil {
@@ -243,9 +269,9 @@ func (s *SOCKS5Server) dialTCP(network, _, raddr string) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.cfg.TunNet.DialContextTCP(context.Background(), addr)
+		return s.cfg.TunNet.DialContextTCP(ctx, addr)
 	}
-	resIP, err := s.cfg.Resolver.Resolve(context.Background(), host)
+	resIP, err := s.cfg.Resolver.Resolve(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -253,12 +279,21 @@ func (s *SOCKS5Server) dialTCP(network, _, raddr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.cfg.TunNet.DialContextTCP(context.Background(), addr)
+	return s.cfg.TunNet.DialContextTCP(ctx, addr)
 }
 
 func (s *SOCKS5Server) dialUDP(network, laddr, raddr string) (net.Conn, error) {
+	return s.dialUDPContext(context.Background(), network, laddr, raddr)
+}
+
+func (s *SOCKS5Server) dialUDPContext(parent context.Context, network, laddr, raddr string) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(parent, s.cfg.DialTimeout)
+	defer cancel()
+	if s.cfg.DialUDP != nil {
+		return s.cfg.DialUDP(ctx, network, raddr)
+	}
 	if s.cfg.Resolver.TunNet != nil {
-		c, err := s.cfg.TunNet.DialContext(context.Background(), network, raddr)
+		c, err := s.cfg.TunNet.DialContext(ctx, network, raddr)
 		if err != nil {
 			if strings.Contains(err.Error(), "port is in use") {
 				return nil, &net.AddrError{Err: "address already in use", Addr: laddr}
@@ -276,9 +311,9 @@ func (s *SOCKS5Server) dialUDP(network, laddr, raddr string) (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.cfg.TunNet.DialUDP(nil, addr)
+		return s.cfg.TunNet.DialContext(ctx, network, addr.String())
 	}
-	resIP, err := s.cfg.Resolver.Resolve(context.Background(), host)
+	resIP, err := s.cfg.Resolver.Resolve(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +321,7 @@ func (s *SOCKS5Server) dialUDP(network, laddr, raddr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	rc, err := s.cfg.TunNet.DialUDP(nil, addr)
+	rc, err := s.cfg.TunNet.DialContext(ctx, network, addr.String())
 	if err != nil {
 		if strings.Contains(err.Error(), "port is in use") {
 			return nil, &net.AddrError{Err: "address already in use", Addr: laddr}
@@ -299,7 +334,7 @@ func (s *SOCKS5Server) dialUDP(network, laddr, raddr string) (net.Conn, error) {
 func (s *SOCKS5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.Request) error {
 	switch r.Cmd {
 	case socks5.CmdConnect:
-		rc, err := r.Connect(c)
+		rc, err := s.connectTCP(c, r)
 		if err != nil {
 			return err
 		}
@@ -308,19 +343,57 @@ func (s *SOCKS5Server) TCPHandle(srv *socks5.Server, c *net.TCPConn, r *socks5.R
 		return nil
 
 	case socks5.CmdUDP:
-		caddr, err := r.UDP(c, c.LocalAddr())
+		assoc, err := s.registerUDPAssociation(r, c.RemoteAddr())
 		if err != nil {
+			_, _ = socks5.NewReply(socks5.RepHostUnreachable, socks5.ATYPIPv4, net.IPv4zero.To4(), []byte{0, 0}).WriteTo(c)
 			return err
 		}
-		ch := make(chan byte)
-		defer close(ch)
-		srv.AssociatedUDP.Set(caddr.String(), ch, -1)
-		defer srv.AssociatedUDP.Delete(caddr.String())
+		defer s.closeUDPAssociation(assoc)
+		// Publish before sending success: a client can send UDP as soon as it sees the reply.
+		if err := c.SetWriteDeadline(time.Now().Add(s.cfg.DialTimeout)); err != nil {
+			return err
+		}
+		replyAddr := &net.UDPAddr{IP: c.LocalAddr().(*net.TCPAddr).IP, Port: srv.UDPConn.LocalAddr().(*net.UDPAddr).Port}
+		if err := writeSOCKSReply(c, replyAddr); err != nil {
+			return err
+		}
+		if err := c.SetWriteDeadline(time.Time{}); err != nil {
+			return err
+		}
 		_, _ = io.Copy(io.Discard, c)
 		return nil
 	}
 
 	return socks5.ErrUnsupportCmd
+}
+
+func writeSOCKSReply(w io.Writer, addr net.Addr) error {
+	atyp, host, port, err := socks5.ParseAddress(addr.String())
+	if err != nil {
+		return err
+	}
+	if atyp == socks5.ATYPDomain {
+		host = host[1:]
+	}
+	_, err = socks5.NewReply(socks5.RepSuccess, atyp, host, port).WriteTo(w)
+	return err
+}
+
+func (s *SOCKS5Server) connectTCP(c net.Conn, r *socks5.Request) (net.Conn, error) {
+	if err := c.SetWriteDeadline(time.Now().Add(s.cfg.DialTimeout)); err != nil {
+		return nil, err
+	}
+	defer func() { _ = c.SetWriteDeadline(time.Time{}) }()
+	rc, err := s.dialTCP("tcp", "", r.Address())
+	if err != nil {
+		_, _ = socks5.NewReply(socks5.RepHostUnreachable, socks5.ATYPIPv4, net.IPv4zero.To4(), []byte{0, 0}).WriteTo(c)
+		return nil, err
+	}
+	if err := writeSOCKSReply(c, rc.LocalAddr()); err != nil {
+		_ = rc.Close()
+		return nil, err
+	}
+	return rc, nil
 }
 
 type closeWriter interface {
@@ -363,26 +436,45 @@ func (s *SOCKS5Server) relayTCP(a, b net.Conn, timeout time.Duration) {
 // UDPHandle is like txthinking DefaultHandle.UDPHandle but does not use srv.UDPSrc.
 func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks5.Datagram) error {
 	src := addr.String()
-	var ch chan byte
+	var assoc *udpAssociation
+	var ch <-chan struct{}
 	if srv.LimitUDP {
-		any, ok := srv.AssociatedUDP.Get(src)
+		var ok bool
+		assoc, ok = s.claimUDPAssociation(addr)
 		if !ok {
 			return fmt.Errorf("udp address %s is not associated with tcp", src)
 		}
-		ch = any.(chan byte)
+		ch = assoc.ctx.Done()
 	}
 	send := func(ue *socks5.UDPExchange, data []byte) error {
 		select {
 		case <-ch:
 			return fmt.Errorf("udp address %s is not associated with tcp", src)
 		default:
+			if err := ue.RemoteConn.SetWriteDeadline(time.Now().Add(s.cfg.DialTimeout)); err != nil {
+				return err
+			}
 			_, err := ue.RemoteConn.Write(data)
 			return err
 		}
 	}
 
 	dst := d.Address()
-	if iue, ok := srv.UDPExchanges.Get(src + dst); ok {
+	key := udpFlowKey{source: src, destination: dst, association: assoc}
+	// Serialize creation and sends for each flow, without holding the association lock during I/O.
+	flowLock := s.udpFlowLock(src, dst)
+	flowLock.Lock()
+	defer flowLock.Unlock()
+	dialCtx := context.Background()
+	if assoc != nil {
+		dialCtx = assoc.ctx
+		// A queued packet may have claimed ownership before the TCP control
+		// connection closed. Do not start another dial after it gets the lock.
+		if err := dialCtx.Err(); err != nil {
+			return err
+		}
+	}
+	if iue, ok := s.udpFlows.Load(key); ok {
 		return send(iue.(*socks5.UDPExchange), d.Data)
 	}
 
@@ -392,7 +484,7 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 		return fmt.Errorf("too many active UDP relay exchanges")
 	}
 
-	rc, err := socks5.DialUDP("udp", "", dst)
+	rc, err := s.dialUDPContext(dialCtx, "udp", "", dst)
 	if err != nil {
 		<-udpRelaySem
 		return err
@@ -401,17 +493,25 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 		ClientAddr: addr,
 		RemoteConn: rc,
 	}
+	stopClose := func() bool { return true }
+	if assoc != nil {
+		stopClose = context.AfterFunc(assoc.ctx, func() { _ = rc.Close() })
+	}
 	if err := send(ue, d.Data); err != nil {
+		stopClose()
 		_ = ue.RemoteConn.Close()
 		<-udpRelaySem
 		return err
 	}
-	srv.UDPExchanges.Set(src+dst, ue, -1)
+	s.udpFlows.Store(key, ue)
 
 	go func(ue *socks5.UDPExchange, dst string) {
 		defer func() {
+			stopClose()
 			_ = ue.RemoteConn.Close()
-			srv.UDPExchanges.Delete(ue.ClientAddr.String() + dst)
+			flowLock.Lock()
+			s.udpFlows.Delete(key)
+			flowLock.Unlock()
 			<-udpRelaySem
 		}()
 		// A stack [65507]byte here escapes to the heap per goroutine (~64 KiB each);
@@ -464,4 +564,15 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 	}(ue, dst)
 
 	return nil
+}
+
+type udpFlowKey struct {
+	source, destination string
+	association         *udpAssociation
+}
+
+func (s *SOCKS5Server) udpFlowLock(source, destination string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(source + "|" + destination))
+	return &s.udpFlowLocks[h.Sum32()%uint32(len(s.udpFlowLocks))]
 }
