@@ -26,6 +26,8 @@ code. No open PR was blindly cherry-picked.
 - Concurrency-safe zero-source UDP associations, source IP restriction, atomic
   claims and teardown of associated relay sockets with the TCP control channel.
 - SOCKS startup errors return nonzero using scoped Cobra `RunE` handlers.
+- SOCKS CONNECT replies receive a fresh bounded write deadline after dialing,
+  so an expired dial budget still produces a protocol error instead of client EOF.
 - Fatal TCP relay errors close both directions so the opposite reader cannot
   retain connections indefinitely. Normal TCP half-close remains supported;
   fault-injection and real TCP tests cover both behaviors.
@@ -77,7 +79,7 @@ quoted connection tuple; the error handler does not verify the original SYN
 sequence. A consistent quote alone does not establish freshness or authenticity.
 Rewriting the source or relaxing the loopback filter would therefore change more
 than diagnostics. Any future adaptation needs bounded correlation with a recently
-sent SYN and dedicated netstack regression tests. Unsolicited type 3/code 1 events
+sent SYN and dedicated netstack regression tests. Further type 3/code 1 events
 were still observed after the controlled invalid-destination reproduction, so the
 egress guard does not establish that every Martian warning is resolved.
 
