@@ -186,6 +186,7 @@ func (s *SOCKS5Server) listenAndServe() error {
 		},
 	})
 	if s.cfg.TCPOnly {
+		s.cfg.Logger.Printf("SOCKS proxy listening on %s (TCP only)", l.Addr())
 		return srv.RunnerGroup.Wait()
 	}
 
@@ -200,6 +201,7 @@ func (s *SOCKS5Server) listenAndServe() error {
 		_ = l.Close()
 		return err
 	}
+	s.cfg.Logger.Printf("SOCKS proxy listening on %s (TCP and UDP)", l.Addr())
 	srv.RunnerGroup.Add(&runnergroup.Runner{
 		Start: func() error {
 			for {
@@ -219,14 +221,14 @@ func (s *SOCKS5Server) listenAndServe() error {
 					payload := (*bp)[:n]
 					d, err := socks5.NewDatagramFromBytes(payload)
 					if err != nil {
-						log.Println(err)
+						s.cfg.Logger.Printf("SOCKS UDP datagram from %s failed during parsing: %v", addr, err)
 						return
 					}
 					if d.Frag != 0x00 {
 						return
 					}
 					if err := srv.Handle.UDPHandle(srv, addr, d); err != nil {
-						log.Println(err)
+						s.cfg.Logger.Printf("SOCKS UDP relay from %s failed: %v", addr, err)
 					}
 				}(addr, bp, n)
 			}

@@ -267,7 +267,6 @@ var socksCmd = &cobra.Command{
 			return fmt.Errorf("failed to create SOCKS proxy: %w", err)
 		}
 
-		log.Printf("SOCKS proxy listening on %s:%s", bindAddress, port)
 		if err := server.Start(); err != nil {
 			return fmt.Errorf("failed to start SOCKS proxy: %w", err)
 		}
