@@ -21,8 +21,17 @@ func validateTunnelDestination(address string) error {
 }
 
 func validateTunnelDestinationHost(host string) error {
-	if ip, err := netip.ParseAddr(host); err == nil {
-		ip = ip.Unmap()
+	parseHost := host
+	// Netstack strips the last IPv6 zone suffix before parsing, including an
+	// empty suffix. Match that behavior so a scoped unspecified address cannot
+	// evade the guard. The original destination remains unchanged for dialing.
+	if strings.ContainsRune(parseHost, ':') {
+		if zone := strings.LastIndexByte(parseHost, '%'); zone >= 0 {
+			parseHost = parseHost[:zone]
+		}
+	}
+	if ip, err := netip.ParseAddr(parseHost); err == nil {
+		ip = ip.WithZone("").Unmap()
 		if ip.IsLoopback() || ip.IsUnspecified() {
 			return ErrInvalidTunnelDestination
 		}

@@ -17,6 +17,7 @@ import (
 func TestTunnelDestinationClasses(t *testing.T) {
 	for _, host := range []string{
 		"0.0.0.0", "127.0.0.1", "127.255.255.254", "::", "::1", "::1%lo",
+		"::%lo", "::%", "::%lo%extra", "0:0:0:0:0:0:0:0%eth0", "::1%",
 		"::ffff:0.0.0.0", "::ffff:127.0.0.1", "localhost", "LOCALHOST.", "service.localhost.",
 	} {
 		if err := validateTunnelDestinationHost(host); !errors.Is(err, ErrInvalidTunnelDestination) {
@@ -26,6 +27,7 @@ func TestTunnelDestinationClasses(t *testing.T) {
 	for _, host := range []string{
 		"1.1.1.1", "192.0.2.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.1.1",
 		"2606:4700:4700::1111", "fd00::1", "::ffff:192.0.2.1", "example.com", "localhost.example.com",
+		"2606:4700:4700::1111%eth0", "fe80::1%eth0", "fd00::1%", "::ffff:192.0.2.1%eth0",
 	} {
 		if err := validateTunnelDestinationHost(host); err != nil {
 			t.Errorf("other host %q rejected: %v", host, err)
@@ -68,7 +70,7 @@ func TestTunnelDestinationRejectsBeforeNetstackTraffic(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, network := range []string{"tcp", "udp"} {
-		for _, host := range []string{"0.0.0.0", "127.0.0.1", "::", "::1", "::ffff:127.0.0.1", "::ffff:0.0.0.0", "localhost", "proxy.LOCALHOST."} {
+		for _, host := range []string{"0.0.0.0", "127.0.0.1", "::", "::1", "::%lo", "::%", "::%lo%extra", "::1%", "::ffff:127.0.0.1", "::ffff:0.0.0.0", "localhost", "proxy.LOCALHOST."} {
 			t.Run(network+"/"+host, func(t *testing.T) {
 				target := net.JoinHostPort(host, "9")
 				var c net.Conn
