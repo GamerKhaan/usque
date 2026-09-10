@@ -387,6 +387,14 @@ func (s *SOCKS5Server) connectTCP(c net.Conn, r *socks5.Request) (net.Conn, erro
 	}
 	defer func() { _ = c.SetWriteDeadline(time.Time{}) }()
 	rc, err := s.dialTCP("tcp", "", r.Address())
+	// Dialing may consume its entire budget. Give the protocol reply its own
+	// bounded write window so a failed dial still sends a SOCKS error response.
+	if deadlineErr := c.SetWriteDeadline(time.Now().Add(s.cfg.DialTimeout)); deadlineErr != nil {
+		if rc != nil {
+			_ = rc.Close()
+		}
+		return nil, errors.Join(err, fmt.Errorf("set SOCKS reply deadline: %w", deadlineErr))
+	}
 	if err != nil {
 		_, _ = socks5.NewReply(socks5.RepHostUnreachable, socks5.ATYPIPv4, net.IPv4zero.To4(), []byte{0, 0}).WriteTo(c)
 		return nil, err
