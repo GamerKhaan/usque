@@ -76,15 +76,19 @@ show_status() {
   "$ROOT/current/usque-supervisor" status || true
 }
 doctor() {
-  local failures=0 current_permissions listeners
+  local failures=0 current_permissions listeners protocol options
   say '=== Service and runtime ==='
-  show_status
+  show_status || failures=$((failures + 1))
+  if ! systemctl is-active --quiet usque.service; then
+    say 'Managed usque.service is not active; an independent proxy probe cannot establish service health.'
+    failures=$((failures + 1))
+  fi
   say '=== Host ==='
   uname -sm
   if [[ -r /etc/os-release ]]; then grep -E '^(PRETTY_NAME|ID|VERSION_ID)=' /etc/os-release; fi
   say '=== Config (contents are never displayed) ==='
   if [[ -f $ETC/config.json ]]; then
-    current_permissions=$(stat -c '%U:%G %a' "$ETC/config.json")
+    current_permissions=$(stat -c '%U:%G %a' "$ETC/config.json") || current_permissions=unreadable
     say "Config ownership/mode: $current_permissions; expected root:usque 640"
     [[ $current_permissions == 'root:usque 640' ]] || failures=$((failures + 1))
     "$ROOT/current/usque-supervisor" validate-config "$ETC/config.json" || failures=$((failures + 1))
@@ -92,10 +96,30 @@ doctor() {
     say 'Config missing. Recovery: sudo usquectl register'
     failures=$((failures + 1))
   fi
+  if [[ -f $ETC/service.env ]]; then
+    current_permissions=$(stat -c '%U:%G %a' "$ETC/service.env") || current_permissions=unreadable
+    say "Service environment ownership/mode: $current_permissions; expected root:usque 640"
+    [[ $current_permissions == 'root:usque 640' ]] || failures=$((failures + 1))
+  else
+    say 'Service environment missing: /etc/usque/service.env'
+    failures=$((failures + 1))
+  fi
   say '=== TCP / UDP listeners ==='
   listeners=$(ss -H -lntu "sport = :$USQUE_PORT") || failures=$((failures + 1))
   say "$listeners"
-  if [[ -z $listeners ]]; then say 'No listener found on the configured port.'; failures=$((failures + 1)); fi
+  for protocol in TCP UDP; do
+    [[ $protocol != UDP || $USQUE_MODE == socks ]] || continue
+    if [[ $protocol == TCP ]]; then options=-lnt; else options=-lnu; fi
+    # Let ss parse/canonicalize IPv4 and IPv6 addresses. A wildcard listener
+    # must not satisfy a configured loopback bind; full socks also requires UDP.
+    if ! listeners=$(ss -H "$options" "src = $USQUE_BIND and sport = :$USQUE_PORT"); then
+      say "Cannot inspect the configured $protocol listener."
+      failures=$((failures + 1))
+    elif [[ -z $listeners ]]; then
+      say "Missing $protocol listener on $USQUE_BIND:$USQUE_PORT."
+      failures=$((failures + 1))
+    fi
+  done
   say '=== DNS through SOCKS and HTTPS/WARP data path ==='
   say "Configured DNS servers: ${USQUE_DNS:-core defaults (Quad9)}"
   probe || failures=$((failures + 1))
@@ -114,6 +138,7 @@ doctor() {
   # Go log messages written to stderr are often classified as info by journald.
   journalctl -u usque.service --since '-15 min' --no-pager -n 200 |
     grep -Ei 'error|fail|timeout|timed out|unhealthy|restart|closed|martian|tunnel packet diagnostic' | tail -n 40 || true
+  say "Doctor checks failed: $failures"
   ((failures == 0))
 }
 

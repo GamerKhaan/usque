@@ -27,6 +27,14 @@ no wildcard or IPv6 listener on this port; config and service.env `root:usque 64
 directory `root:usque 750`; status and new probe healthy. Inspect the entire
 listener list with `sudo ss -lntup` for unexpected binds.
 
+Require `usquectl doctor` to exit zero with `Doctor checks failed: 0`. On a
+staging host, a stopped managed service must produce a nonzero result even if a
+manually started SOCKS proxy answers HTTPS. A full `socks` profile missing its UDP
+listener must also fail; a healthy TCP-only `l4-socks` profile must not require
+UDP. Restore the managed service before continuing. Controlled fixtures for
+these cases, wrong binds, IPv6, inspection failures and environment permissions
+run in `bash tests/deployment_test.sh` without stopping the host service.
+
 ```bash
 curl --fail --show-error --silent --max-time 15 \
   --socks5-hostname 127.0.0.1:903 https://www.cloudflare.com/cdn-cgi/trace

@@ -3,6 +3,34 @@
 Date: 2026-09-10. Upstream base: `v4.2.1`,
 `6aa03fc97d12848dce34eedbd187fb1077b5d1ea`.
 
+## 2026-09-11 follow-up and doctor regression
+
+A live Ubuntu recheck of `v4.2.1-gk.5` found the same child running for about
+23 hours. Its supervisor restart counter remained at one, from installation.
+Two consecutive HTTPS probe timeouts overnight recovered on the next probe
+without restarting the child. Four explicit destination tests (two IPv4 and two
+IPv6 Cloudflare addresses, validated TLS and trace) all returned HTTP 200 with
+`warp=on`, taking 110-139 ms. Eight SOCKS UDP DNS cases passed: zero/explicit
+source association, domain/IP destination, each repeated twice. These are
+bounded spot checks, not evidence that every client destination is reachable.
+
+No recent kernel warnings or NIC error/drop counters were found in that sample.
+Both UDP buffer ceilings were already 134217728 bytes, above the documented
+minimum, so no additional sysctl tuning was warranted. Destination timeouts,
+loopback-source ICMP diagnostics and invalid zero-domain UDP frames still occur;
+this check does not establish that those upstream/client issues are resolved.
+
+The doctor regression fixture reproduced a false success with an inactive
+managed service and a successful independent proxy probe. The fix also requires
+the configured TCP bind, the UDP bind for full SOCKS, and expected service.env
+permissions. Eight new cases cover healthy full SOCKS, inactive service, absent
+UDP, wrong bind, failed listener inspection, TCP-only mode, IPv6, and environment
+permissions. All 41 deployment tests passed locally under MSYS; ShellCheck,
+the complete Go suite, race tests, vet and golangci-lint passed on Windows.
+The candidate doctor also returned zero against the live healthy Ubuntu service
+without modifying or restarting it. Exact-tag Ubuntu CI runs again before
+release publication; its results are available on the release's Actions run.
+
 ## Executed checks
 
 The initial complete implementation at `8814b22bf4e955c948df49ea15e0bacdebf7652a`

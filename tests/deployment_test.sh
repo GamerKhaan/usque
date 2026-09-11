@@ -11,7 +11,8 @@ if [[ ${1:-} != --case ]]; then
     switch_activate_error switch_previous_error switch_restore_error
     import_invalid import_rollback import_success import_restore_error register_preserves register_failure
     buffers_increase buffers_preserve archive_valid archive_bad_checksum archive_link
-    archive_traversal release_immutable update_failure update_success rollback_failure install_links_error install_idempotent)
+    archive_traversal release_immutable update_failure update_success rollback_failure install_links_error install_idempotent
+    doctor_healthy doctor_inactive doctor_missing_udp doctor_wrong_bind doctor_ss_failure doctor_l4 doctor_ipv6 doctor_env_permissions)
   passed=0
   for test_name in "${cases[@]}"; do
     if bash "$0" --case "$test_name"; then
@@ -99,6 +100,36 @@ install() {
 wait_healthy() { [[ $(cat "$ROOT/current/VERSION") != v2.0.0 ]]; }
 
 case $2 in
+  doctor_*)
+    scenario=$2
+    load_env
+    printf '{"valid":true}\n' > "$ETC/config.json"
+    printf 'USQUE_PORT=903\n' > "$ETC/service.env"
+    [[ $scenario != doctor_l4 ]] || USQUE_MODE=l4-socks
+    [[ $scenario != doctor_ipv6 ]] || USQUE_BIND=::1
+    show_status() { :; }
+    stat() {
+      if [[ $scenario == doctor_env_permissions && ${*: -1} == "$ETC/service.env" ]]; then
+        printf 'root:root 644\n'
+      else printf 'root:usque 640\n'; fi
+    }
+    systemctl() { [[ $scenario != doctor_inactive ]]; }
+    sysctl() { :; }
+    journalctl() { :; }
+    ss() {
+      [[ $scenario != doctor_ss_failure ]] || return 1
+      if [[ $* == *'src = '* ]]; then
+        [[ $* == *"src = $USQUE_BIND and sport = :903"* ]] || return 1
+        [[ $scenario != doctor_wrong_bind ]] || return 0
+        if [[ $* == *'-lnu'* && ( $scenario == doctor_missing_udp || $scenario == doctor_l4 ) ]]; then return 0; fi
+      fi
+      printf 'LISTEN 0 128 %s:903 *:*\n' "$USQUE_BIND"
+    }
+    case $scenario in
+      doctor_healthy|doctor_l4|doctor_ipv6) doctor > "$work/doctor.log" ;;
+      *) assert_fails doctor > "$work/doctor.log" ;;
+    esac
+    ;;
   env_defaults)
     cp "$repo/deploy/service.env" "$ETC/service.env"
     # Managed paths differ only inside this temporary fixture.

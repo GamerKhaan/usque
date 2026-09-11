@@ -62,7 +62,7 @@ sudo usquectl uninstall
 
 `health` makes a fresh HTTPS request through SOCKS5, requiring HTTP 200 and `warp=on` or `warp=plus`. The hostname is sent to SOCKS. Full `socks` resolves it through the WARP netstack. `l4-socks` uses local destination DNS and only supports TCP.
 
-`status` shows systemd, mode/endpoint, release/core versions, and supervisor health/failures/restarts. Counters cover the current supervisor lifetime; journald retains earlier events. `doctor` inspects permissions, listeners, HTTPS, OS/architecture, UDP buffers, and journal errors without dumping credentials. Use `sudo` for protected state and logs.
+`status` shows systemd, mode/endpoint, release/core versions, and supervisor health/failures/restarts. Counters cover the current supervisor lifetime; journald retains earlier events. `doctor` checks the active service, configuration permissions, listeners on the configured address (including UDP for full SOCKS), and HTTPS/WARP. It also reports OS/architecture, UDP buffers, and journal errors without dumping credentials. Failed checks produce a nonzero exit status. Use `sudo` for protected state and logs.
 
 ## Configuration
 

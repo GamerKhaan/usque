@@ -5,6 +5,15 @@ Use `sudo usquectl status`, `sudo usquectl health`, `sudo usquectl doctor` and
 always performs a new request. A listener or systemd `active` state alone does
 not prove WARP connectivity.
 
+`doctor` returns nonzero when the managed systemd service is inactive, either
+managed configuration file has unexpected ownership/permissions, the configured
+TCP listener is missing, or the HTTPS/WARP probe fails. Full `socks` also requires
+a UDP listener on the configured bind address; `l4-socks` requires TCP only.
+Listener inspection errors are failures. A manual proxy or a wildcard listener
+must not mask a missing managed service or a missing configured loopback bind.
+The final `Doctor checks failed` count summarizes these checks. A UDP listener
+still does not prove forwarding: exercise UDP DNS and your actual client as well.
+
 ## Recovery behavior
 
 The supervisor probes immediately on child start, then waits 20 seconds after
