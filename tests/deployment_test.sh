@@ -119,7 +119,14 @@ case $2 in
     ss() {
       [[ $scenario != doctor_ss_failure ]] || return 1
       if [[ $* == *'src = '* ]]; then
-        [[ $* == *"src = $USQUE_BIND and sport = :903"* ]] || return 1
+        if [[ $scenario == doctor_ipv6 ]]; then
+          [[ $* == *'src = [::1] and sport = :903'* ]] || return 1
+          # Linux CI exercises iproute2's actual IPv6 filter parser, even when
+          # the runner has no IPv6 loopback address. Windows uses the fixture.
+          if ! $fixture_msys; then command ss "$@" >/dev/null || return 1; fi
+        else
+          [[ $* == *"src = $USQUE_BIND and sport = :903"* ]] || return 1
+        fi
         [[ $scenario != doctor_wrong_bind ]] || return 0
         if [[ $* == *'-lnu'* && ( $scenario == doctor_missing_udp || $scenario == doctor_l4 ) ]]; then return 0; fi
       fi

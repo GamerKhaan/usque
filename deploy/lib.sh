@@ -76,7 +76,7 @@ show_status() {
   "$ROOT/current/usque-supervisor" status || true
 }
 doctor() {
-  local failures=0 current_permissions listeners protocol options
+  local failures=0 current_permissions listeners protocol options bind_filter
   say '=== Service and runtime ==='
   show_status || failures=$((failures + 1))
   if ! systemctl is-active --quiet usque.service; then
@@ -107,12 +107,15 @@ doctor() {
   say '=== TCP / UDP listeners ==='
   listeners=$(ss -H -lntu "sport = :$USQUE_PORT") || failures=$((failures + 1))
   say "$listeners"
+  bind_filter=$USQUE_BIND
+  # Brackets prevent ss from interpreting the final IPv6 component as a port.
+  [[ $bind_filter != *:* ]] || bind_filter="[$bind_filter]"
   for protocol in TCP UDP; do
     [[ $protocol != UDP || $USQUE_MODE == socks ]] || continue
     if [[ $protocol == TCP ]]; then options=-lnt; else options=-lnu; fi
     # Let ss parse/canonicalize IPv4 and IPv6 addresses. A wildcard listener
     # must not satisfy a configured loopback bind; full socks also requires UDP.
-    if ! listeners=$(ss -H "$options" "src = $USQUE_BIND and sport = :$USQUE_PORT"); then
+    if ! listeners=$(ss -H "$options" "src = $bind_filter and sport = :$USQUE_PORT"); then
       say "Cannot inspect the configured $protocol listener."
       failures=$((failures + 1))
     elif [[ -z $listeners ]]; then
