@@ -95,6 +95,14 @@ all destinations, throughput, capacity or long-term stability.
 
 ## Next investigation
 
+The 2026-09-11 live audit observed a remote HTTP/3 `H3_REQUEST_CANCELLED`, a core
+reconnect message one second later, and three subsequent HTTPS probe timeouts.
+Only after supervisor child replacement did the probe recover. Reproduce this
+sequence with controlled CONNECT-IP peer closure and verify packet forwarding,
+DNS and reader cleanup after reconnect; do not treat the connection log as
+readiness or attribute this event to MTU without further evidence. Details and
+timestamps are in [validation evidence](VALIDATION.md).
+
 Perform a staging Ubuntu soak with real personal WARP credentials and exact
 Xray/sing-box/Hysteria versions. Capture restart count, latency, RSS and concurrent
 TCP/UDP results. Reproduce tunnel reader cancellation and MTU/initial-packet-size

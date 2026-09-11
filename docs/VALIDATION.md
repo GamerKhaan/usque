@@ -5,8 +5,8 @@ Date: 2026-09-10. Upstream base: `v4.2.1`,
 
 ## 2026-09-11 follow-up and doctor regression
 
-A live Ubuntu recheck of `v4.2.1-gk.5` found the same child running for about
-23 hours. Its supervisor restart counter remained at one, from installation.
+At 14:13 UTC a live Ubuntu recheck of `v4.2.1-gk.5` found the same child running
+for about 23 hours. Its restart counter was one, from installation.
 Two consecutive HTTPS probe timeouts overnight recovered on the next probe
 without restarting the child. Four explicit destination tests (two IPv4 and two
 IPv6 Cloudflare addresses, validated TLS and trace) all returned HTTP 200 with
@@ -28,8 +28,28 @@ UDP, wrong bind, failed listener inspection, TCP-only mode, IPv6, and environmen
 permissions. All 41 deployment tests passed locally under MSYS; ShellCheck,
 the complete Go suite, race tests, vet and golangci-lint passed on Windows.
 The candidate doctor also returned zero against the live healthy Ubuntu service
-without modifying or restarting it. Exact-tag Ubuntu CI runs again before
-release publication; its results are available on the release's Actions run.
+without modifying or restarting it. The IPv6 filter was subsequently checked
+against Ubuntu's actual `ss` parser and corrected to use brackets; Linux tests
+now exercise that parser. The unreleased gk.6 workflow was cancelled before
+publication. [Exact-tag gk.7 CI](https://github.com/GamerKhaan/usque/actions/runs/34610130512)
+passed the full Go/race/vet/lint suite, 41 deployment tests, four hardened systemd
+lifecycle groups, and both amd64/arm64 archive checks.
+
+During the same audit, before deploying any update, the peer closed the gk.5
+HTTP/3 stream at 14:25:31 UTC (`H3_REQUEST_CANCELLED`, remote application error
+0x10c). Core logged a new MASQUE connection at 14:25:32, but the next three
+HTTPS probes timed out. The supervisor stopped and replaced the child at
+14:26:38-39; health returned at 14:26:59. This was an observed production failure
+and automatic recovery, with no deliberate fault injection. A successful
+reconnect log did not establish a working data path. The precise cause after
+reconnect remains unproven; this release does not change the tunnel pumps.
+
+The gk.7 health-gated update completed at 14:29:30 UTC with exit zero and both
+configuration files byte-for-byte preserved. The previous release remained gk.5.
+The installed doctor reported zero failed checks; an independent HTTPS probe
+returned `warp=on` in 72 ms. The process remained unprivileged with only
+CAP_NET_BIND_SERVICE, and TCP/UDP listeners remained on 127.0.0.1:903. No kernel,
+firewall, routing, MTU or DNS setting was changed during this maintenance.
 
 ## Executed checks
 
